@@ -34,9 +34,13 @@ vec3 HueKeepingAces(vec3 color) {
 
     }
 
-    vec3 hue = color * (Aces(vec3(peak)).r / peak);
+    float white = Aces(vec3(peak)).r;
+    vec3 hue = color * (white / peak);
 
-    return mix(channels, hue, 0.7 * smoothstep(1.0, 4.0, peak));
+    // Far past white, film bleaches towards white; holding the full hue turned bright limb clouds pink.
+    hue = mix(hue, vec3(white), 0.6 * smoothstep(1.0, 8.0, peak));
+
+    return mix(channels, hue, 0.5 * smoothstep(1.0, 4.0, peak));
 
 }
 

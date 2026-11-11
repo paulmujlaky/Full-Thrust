@@ -59,6 +59,3 @@ To generate models from GLB files, run the following command:
 ```sh
 dotnet run --project tools/FullThrust.ModelGen
 ```
-
-## License
-The license is the [Unlicense](https://unlicense.org/), which allows for free use, modification, and distribution of the software.

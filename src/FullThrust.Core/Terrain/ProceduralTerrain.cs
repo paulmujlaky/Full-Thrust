@@ -137,7 +137,7 @@ public sealed class ProceduralTerrain : ITerrain {
 
         height += Detail(d, resolution, 0.6 + 2.5 * mountainMask) * (0.3 + 0.7 * land);
 
-        var moisture = _noise.Fbm(p.X * 3.1 + 101.0, p.Y * 3.1 + 59.0, p.Z * 3.1 + 23.0, 4) * 0.5 + 0.5;
+        var moisture = _noise.Fbm(p.X * 3.1 + 101.0, p.Y * 3.1 + 59.0, p.Z * 3.1 + 23.0, 4) * 1.4 + 0.5;
 
         return new TerrainSample { Height = height, Moisture = (float)Math.Clamp(moisture, 0, 1), Feature = (float)(mountainMask * ridges) };
 
@@ -159,7 +159,10 @@ public sealed class ProceduralTerrain : ITerrain {
 
         Craters(d, resolution, mare, ref height, ref feature);
 
-        return new TerrainSample { Height = height, Moisture = (float)mare, Feature = (float)Math.Clamp(feature, 0, 1) };
+        var regolith = 0.08 * _noise.Fbm(p.X * 37 + 17, p.Y * 37 + 31, p.Z * 37 + 53, 3);
+        var tone = Math.Clamp(mare + regolith, 0, 1);
+
+        return new TerrainSample { Height = height, Moisture = (float)tone, Feature = (float)Math.Clamp(feature, 0, 1) };
 
     }
 
@@ -258,11 +261,16 @@ public sealed class ProceduralTerrain : ITerrain {
                 var tangent = double3.Normalize(double3.Cross(Math.Abs(normal.Y) < 0.9 ? double3.UnitY : double3.UnitX, normal));
                 var delta = point - surface;
                 var angle = Math.Atan2(double3.Dot(delta, double3.Cross(normal, tangent)), double3.Dot(delta, tangent));
-                var rays = Math.Pow(0.5 + 0.5 * Math.Cos(angle * 9 + 2.4 * Math.Sin(angle * 3 + fresh * 17)), 4);
+                // Only the youngest craters keep bright walls and rays; older ones have weathered into the regolith around them.
+                var young = SmoothStep(0.72, 0.97, fresh);
+                var spokes = 5 + Math.Floor(13 * Hash(cx, cy, cz, scale, 6));
+                var sharpness = 3 + 9 * Hash(cx, cy, cz, scale, 7);
+                var reach = 1.3 + 0.7 * Hash(cx, cy, cz, scale, 8);
+                var rays = Math.Pow(0.5 + 0.5 * Math.Cos(angle * spokes + 2.4 * Math.Sin(angle * 3 + fresh * 17)), sharpness);
                 var walls = SmoothStep(0.45, 0.98, distance) * (1 - SmoothStep(1.0, 1.35, distance));
-                var blanket = (0.15 + 0.85 * rays) * SmoothStep(0.82, 1.05, distance) * (1 - SmoothStep(1.0, 2, distance));
+                var blanket = (0.25 + 0.75 * rays) * SmoothStep(0.82, 1.05, distance) * (1 - SmoothStep(1.0, reach, distance)) * young;
 
-                feature = Math.Max(feature, fresh * (0.2 * (1 - SmoothStep(0.5, 1.0, distance)) + 0.72 * walls + blanket));
+                feature = Math.Max(feature, fresh * (0.2 * (1 - SmoothStep(0.5, 1.0, distance)) + 0.72 * walls * (0.25 + 0.75 * young) + blanket));
 
             }
 

@@ -31,6 +31,15 @@ void main() {
     }
 
     vec4 now = texelFetch(current, pixel, 0);
+
+    if (pc.originShift.w >= 1.0) {
+
+        imageStore(resolved, pixel, now);
+
+        return;
+
+    }
+
     vec4 sum = vec4(0.0);
     vec4 squares = vec4(0.0);
 
@@ -66,15 +75,21 @@ void main() {
     // History fetched from far away is stale under fast camera motion, so the further a pixel travelled the more this frame counts.
     vec2 travel = (uv - (vec2(full) + 0.5) * frame.viewport.zw) * vec2(size);
 
-    weight = mix(weight, 0.6, smoothstep(0.5, 6.0, length(travel)));
+    weight = max(weight, mix(weight, 0.6, smoothstep(0.5, 6.0, length(travel))));
 
     if (clip.w <= 0.0 || any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) {
 
-        weight = 1.0;
+        imageStore(resolved, pixel, now);
+
+        return;
 
     }
 
-    vec4 previous = clamp(texture(history, uv), low, high);
+    // History texel centres represent the top-left full-resolution pixel, not the block centre.
+    vec2 historyUv = (uv * frame.viewport.xy + 0.5) / (2.0 * vec2(size));
+    vec4 previous = clamp(texture(history, historyUv), low, high);
+    float change = abs(previous.a - now.a);
+    weight = max(weight, smoothstep(0.05, 0.3, change) * 0.8);
 
     imageStore(resolved, pixel, mix(previous, now, weight));
 

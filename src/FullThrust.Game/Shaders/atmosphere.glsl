@@ -584,12 +584,16 @@ vec3 FroxelAerialPerspective(vec3 radiance, float distance, vec2 fragCoord, floa
 
     // Slice k ends at maxDistance * ((k + 1) / slices)^2, which puts its texel centre here.
     float depth = sqrt(distance / maxDistance) - 0.5 / slices;
-    vec4 ap = texture(aerialPerspective, vec3(fragCoord * frame.viewport.zw, max(depth, 0.5 / slices)));
+    vec3 coord = vec3(fragCoord * frame.viewport.zw, max(depth, 0.5 / slices));
+    vec4 ap = texture(aerialPerspective, coord);
+
+    // Per channel, so distant ground and cloud redden through the haze instead of greying.
+    vec3 transmittance = texture(aerialTransmittance, coord).rgb;
 
     float first = maxDistance / (slices * slices);
     float fade = clamp(distance / first, 0.0, 1.0);
 
-    return radiance * mix(1.0, ap.a, fade) + ap.rgb * (fade * opacity) * frame.sunIlluminance.rgb;
+    return radiance * mix(vec3(1.0), transmittance, fade) + ap.rgb * (fade * opacity) * frame.sunIlluminance.rgb;
 
 }
 

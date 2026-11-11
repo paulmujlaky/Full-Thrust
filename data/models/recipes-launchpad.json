@@ -1,0 +1,11 @@
+{
+  "models": [
+    {
+      "output": "scene/launchpad.glb",
+      "type": "launchpad",
+      "diameter": 120,
+      "length": 3,
+      "seed": 12
+    }
+  ]
+}

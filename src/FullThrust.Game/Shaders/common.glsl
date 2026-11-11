@@ -75,6 +75,7 @@ layout(set = 0, binding = 8) uniform sampler3D cloudNoise;
 layout(set = 0, binding = 11) uniform sampler2D weatherMap;
 layout(set = 0, binding = 9) uniform sampler2D skyShafts;
 layout(set = 0, binding = 10) uniform sampler2D cloudShadowMap;
+layout(set = 0, binding = 12) uniform sampler3D aerialTransmittance;
 
 const float PI = 3.14159265359;
 
@@ -246,7 +247,10 @@ float BeamWeight(int index, vec3 towardLight) {
 
     }
 
-    return smoothstep(beam.w, mix(beam.w, 1.0, 0.45), -dot(beam.xyz, towardLight));
+    // A real luminaire's beam fades over a wide penumbra rather than ending at a hard rim.
+    float t = smoothstep(beam.w - 0.15, mix(beam.w, 1.0, 0.7), -dot(beam.xyz, towardLight));
+
+    return t * t;
 
 }
 
@@ -296,7 +300,8 @@ vec3 ShadeSurface(Surface s, vec3 p, vec3 n, vec3 v, float shadow) {
 
     }
 
-    vec3 ambient = (1.0 - ambientF) * (1.0 - s.metallic) * s.albedo * irradiance / PI + ambientF * mix(reflected, irradiance / PI, roughness);
+    float specularVisibility = clamp(pow(nv + s.occlusion, exp2(-16.0 * roughness - 1.0)) - 1.0 + s.occlusion, 0.0, 1.0);
+    vec3 ambient = (1.0 - ambientF) * (1.0 - s.metallic) * s.albedo * irradiance / PI + ambientF * mix(reflected, irradiance / PI, roughness) * specularVisibility;
 
     ambient *= EclipseSkylight(p);
 

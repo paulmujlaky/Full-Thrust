@@ -103,9 +103,10 @@ public static class GlobalBindings {
     public const int SkyShafts = 9;
     public const int CloudShadowMap = 10;
     public const int WeatherMap = 11;
+    public const int AerialTransmittance = 12;
 
     // Every binding after Frame is a combined image sampler; add new ones here and in common.glsl.
-    public const int Count = 12;
+    public const int Count = 13;
 
 }
 

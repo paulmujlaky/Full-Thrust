@@ -17,7 +17,7 @@ public sealed class ReentrySource : IVolumeSource {
     private const double PeakFlux = 2e6;
 
     // Radiance of the shock layer at peak heating, in cd/m2.
-    private const float PeakLuminance = 16000f;
+    private const float PeakLuminance = 120000f;
 
     private static readonly float3 Dim = new(1.0f, 0.36f, 0.12f);
     private static readonly float3 Hot = new(1.0f, 0.72f, 0.66f);
@@ -75,12 +75,12 @@ public sealed class ReentrySource : IVolumeSource {
             Strength = MathF.Max(Strength, strength);
 
             var colour = float3.Lerp(Dim, Hot, strength);
-            var luminance = PeakLuminance * strength * strength * strength;
+            var luminance = PeakLuminance * strength * strength;
             var downstream = -SpaceMath.ToFloat(upstream);
 
             // One shock wraps the whole windward line, so a capsule glows at its shield and a broadside stack wears a single sheath.
-            var radius = (float)nose * 1.3f;
-            var length = radius * 5;
+            var radius = (float)nose;
+            var length = radius * 3;
             var standoff = upstream * (radius * 0.12);
 
             var nearEnd = _origin.ToLocal(head + standoff);
@@ -121,7 +121,7 @@ public sealed class ReentrySource : IVolumeSource {
                 Position = new float4(wakeStart + downstream * (wakeLength * 0.5f), MathF.Sqrt(wakeLength * wakeLength * 0.25f + wakeRadius * wakeRadius * 4)),
                 Axis = new float4(downstream, wakeLength),
                 Medium = new float4(0.5f, 0.5f, 0.5f, 0),
-                Emission = new float4(colour * (luminance * 0.5f / (2 * wakeRadius)), 0.3f),
+                Emission = new float4(colour * (luminance * 0.12f / (2 * wakeRadius)), 0.3f),
                 Params0 = new float4(wakeStart, wakeRadius),
                 Params1 = new float4(0.06f, 1, 0, 0),
                 Params2 = new float4(1.0f, 0.55f, 0.5f, 0.15f),

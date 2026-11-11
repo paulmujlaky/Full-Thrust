@@ -20,7 +20,7 @@ float ViewDistance(float depth) {
 void main() {
 
     ivec2 size = textureSize(volumeColor, 0);
-    vec2 position = gl_FragCoord.xy * 0.5 - 0.5;
+    vec2 position = (gl_FragCoord.xy - 0.5) * 0.5;
     ivec2 base = ivec2(floor(position));
     vec2 f = position - vec2(base);
 

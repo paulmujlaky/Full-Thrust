@@ -285,7 +285,8 @@ VolumeSample Plume(VolumePrimitive v, vec3 p) {
 
     }
 
-    vec3 flow = offset / (exitRadius * 4.0) - v.axis.xyz * (frame.exposure.w * 6.0);
+    // Eddies stretch along the jet; isotropic cells read as a string of beads.
+    vec3 flow = transverse / (exitRadius * 3.0) + v.axis.xyz * (x / (exitRadius * 14.0) - frame.exposure.w * 6.0);
     vec4 eddy = texture(shapeNoise, flow);
     float mixing = smoothstep(0.0, span * 0.35, x);
     float edge = r / radius + mixing * (eddy.r - 0.5) * 1.35;
@@ -297,16 +298,17 @@ VolumeSample Plume(VolumePrimitive v, vec3 p) {
 
     float density = profile * dilution * along * turbulence;
 
-    float wave = 0.5 + 0.5 * cos(6.2831853 * x / spacing);
-    float shockRadius = radius * (0.16 + 0.55 * wave);
-    float shockWall = (r - shockRadius) / max(0.22 * radius, 1e-4);
-    float diamonds = v.params1.z * exp(-shockWall * shockWall - x / (spacing * 2.6)) * along;
+    // Mach disks: a compact knot on the axis at the end of each shock cell, gone within a few cells as the jet mixes out.
+    float cell = x / spacing;
+    float knot = (fract(cell + 0.5) - 0.5) * spacing / max(0.35 * exitRadius, 1e-3);
+    float disk = exp(-knot * knot - pow(r / max(0.45 * radius, 1e-4), 2.0));
+    float diamonds = v.params1.z * 0.45 * disk * exp(-cell / 1.6) * smoothstep(0.3, 0.7, cell) * along;
 
     // A white-hot core near the nozzle inside a cooler sheath; params2 holds the sheath colour and core whiteness.
     vec3 white = vec3(dot(v.emission.rgb, vec3(0.2126, 0.7152, 0.0722)));
     float core = exp(-4.0 * (r * r) / (radius * radius)) * exp(-x / (span * 0.3));
     vec3 tint = mix(vec3(1.0), v.params2.rgb, smoothstep(0.3, 1.0, r / radius));
-    vec3 hot = mix(v.emission.rgb * tint, white * 1.3, core * v.params2.w) * (0.3 + 0.7 * exp(-x / (span * 0.25)));
+    vec3 hot = mix(v.emission.rgb * tint, white, core * v.params2.w) * (0.3 + 0.7 * exp(-x / (span * 0.25)));
 
     s.extinction = density * v.medium.w;
     // Afterburning keeps the exhaust glowing as it spreads, so emission thins more slowly than mass.
@@ -470,11 +472,11 @@ VolumeSample Shock(VolumePrimitive v, vec3 p) {
     float r = length(offset - v.axis.xyz * x);
     float slope = r / nose;
     float behind = (x - 0.5 * r * slope) * inversesqrt(1.0 + slope * slope);
-    float thickness = nose * 0.12 + max(x, 0.0) * 0.055;
+    float thickness = nose * 0.07 + max(x, 0.0) * 0.04;
 
     // The shock front glows hardest, and the compressed gas behind it fades downstream; the flow tears it into flickering streaks.
     float sheet = exp(-pow(behind / thickness, 2.0));
-    float inside = smoothstep(-thickness, thickness, behind) * exp(-max(behind, 0.0) / (nose * 0.34));
+    float inside = smoothstep(-thickness, thickness, behind) * exp(-max(behind, 0.0) / (nose * 0.22));
     float streaks = texture(shapeNoise, vec3(r / (nose * 1.5), x / (nose * 6.0) - frame.exposure.w * 2.0, 0.37 + u * sqrt(reach) / (nose * 4.0))).r;
 
     // Hottest in the layer pressed against the nose where the shock stands normal; as it turns oblique down the flanks it barely glows.
@@ -583,9 +585,42 @@ float SunOpticalDepth(VolumePrimitive v, vec3 p, vec3 sunDirection) {
     float dt = reach / float(max(steps, 1));
     float depth = 0.0;
 
+    // Self-shadow is shaped by the billows, not the wisps, so the detail noise is skipped here.
+    float footprint = volumeFootprint;
+
+    volumeFootprint = max(volumeFootprint, 250.0);
+
     for (int i = 0; i < steps; i++) {
 
         depth += SampleVolume(v, p + sunDirection * (float(i) + 0.5) * dt).extinction * dt;
+
+    }
+
+    volumeFootprint = footprint;
+
+    return depth;
+
+}
+
+// Smoke between a sample and a light inside or beside it, so flame-lit billows shade their far sides.
+float LightOpticalDepth(VolumePrimitive v, vec3 p, vec3 toLight) {
+
+    if (v.kind.x != VolumeNoiseSphere && v.kind.x != VolumeGroundOutflow && v.kind.x != VolumeTrail) {
+
+        return 0.0;
+
+    }
+
+    const int Steps = 3;
+
+    float distance = sqrt(max(dot(toLight, toLight), 1e-6));
+    vec3 direction = toLight / distance;
+    float dt = min(distance, v.position.w * 2.0) / float(Steps);
+    float depth = 0.0;
+
+    for (int i = 0; i < Steps; i++) {
+
+        depth += SampleVolume(v, p + direction * (float(i) + 0.5) * dt).extinction * dt;
 
     }
 
@@ -698,14 +733,15 @@ void MarchVolume(VolumePrimitive v, vec3 origin, vec3 direction, float enter, fl
 
         }
 
-        // Point lights scatter isotropically, unshadowed.
+        // Local extinction keeps lit smoke from glowing equally on both sides.
         for (int light = 0; light < int(frame.lightCount.x); light++) {
 
             vec3 toLight = frame.lightPositions[light].xyz - p;
             float distanceSquared = dot(toLight, toLight) + frame.lightPositions[light].w * frame.lightPositions[light].w;
 
             float beam = BeamWeight(light, toLight * inversesqrt(max(dot(toLight, toLight), 1e-6)));
-            ambient += frame.lightIntensities[light].rgb * beam / distanceSquared / (4.0 * PI);
+            float visibility = exp(-LightOpticalDepth(v, p, toLight));
+            ambient += frame.lightIntensities[light].rgb * beam * visibility / distanceSquared / (4.0 * PI);
 
         }
 

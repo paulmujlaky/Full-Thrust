@@ -622,7 +622,18 @@ public static class Generators {
 
         inner[0] = new float2(0, chamber);
         inner[^1] = profile[0];
-        mesh.Lathe(profile, shell, options);
+
+        var bellArc = 0f;
+
+        for (var i = 1; i < profile.Length; i++) {
+
+            bellArc += float2.Distance(profile[i - 1], profile[i]);
+
+        }
+
+        var jacket = mesh.AddMaterial(NozzleJacket(mesh, radius, bellArc, vacuum, recipe.Seed));
+
+        mesh.Lathe(profile, jacket, options with { VMetres = bellArc });
         mesh.Lathe(inner, liner, options);
 
         var head = LatheOptions.Default with { Segments = 64 };
@@ -658,6 +669,63 @@ public static class Generators {
         return mesh.Build(recipe.Output);
 
     }
+    // Regeneratively cooled bell: brazed tubes from throat to lip, temper colours near the throat and soot at the exit; texture V runs throat (0) to exit (1).
+    private static MaterialData NozzleJacket(MeshBuilder mesh, float radius, float arc, bool vacuum, int seed) {
+
+        var texture = new TextureBuilder(1024, 256);
+        var circumference = MathF.Tau * radius;
+        var tubes = vacuum ? 0 : Math.Max(64, (int)MathF.Round(circumference / 0.025f));
+
+        texture.Paint((u, v, t) => {
+
+            var grime = Noise.Fbm(u, v, 8, 5, seed);
+            var streaks = Noise.Value(u * 96, v * 3, 96, seed + 5);
+            var heat = 1 - v;
+            var temper = float3.Lerp(new float3(0.36f, 0.25f, 0.13f), new float3(0.17f, 0.12f, 0.24f), SmoothStep(0.6f, 0.95f, heat));
+            var bare = vacuum ? new float3(0.55f, 0.53f, 0.5f) : new float3(0.45f, 0.33f, 0.24f);
+            var metal = float3.Lerp(bare, temper, SmoothStep(0.35f, 0.8f, heat));
+            var soot = SmoothStep(0.55f, 1.0f, v) * (0.45f + 0.55f * streaks);
+            var color = float3.Lerp(metal, new float3(0.035f, 0.03f, 0.028f), soot * 0.85f) * (0.85f + 0.3f * grime);
+            var height = 0f;
+            var occlusion = 1f;
+
+            if (tubes > 0) {
+
+                var crown = MathF.Sin(u * tubes % 1.0f * MathF.PI);
+
+                height = 0.0015f * MathF.Sqrt(crown);
+                occlusion = 0.7f + 0.3f * crown;
+                color *= 0.8f + 0.2f * crown;
+
+            }
+
+            t.Color = color;
+            t.Metallic = 1 - 0.75f * soot;
+            t.Roughness = Math.Clamp(0.3f + 0.45f * soot + 0.15f * (grime - 0.5f), 0.1f, 1);
+            t.Height = height;
+            t.Occlusion = occlusion;
+
+        });
+
+        var material = Material("nozzle_jacket", new float3(1), 1, 1);
+
+        material.BaseColorTexture = mesh.AddTexture(texture.BaseColor("nozzle_basecolor"));
+        material.MetallicRoughnessTexture = mesh.AddTexture(texture.MetallicRoughness("nozzle_orm"));
+        material.OcclusionTexture = material.MetallicRoughnessTexture;
+        material.NormalTexture = mesh.AddTexture(texture.Normal("nozzle_normal", circumference / texture.Width, arc / texture.Height));
+
+        return material;
+
+    }
+
+    private static float SmoothStep(float edge0, float edge1, float x) {
+
+        var t = Math.Clamp((x - edge0) / (edge1 - edge0), 0, 1);
+
+        return t * t * (3 - 2 * t);
+
+    }
+
     // A thrust plate with a ring of engines (and optionally one in the centre) instanced from a source model.
     private static ModelData Cluster(Recipe recipe, string modelsRoot) {
 
@@ -926,8 +994,8 @@ public static class Generators {
         concrete.NormalTexture = mesh.AddTexture(texture.Normal("concrete_normal", size / texture.Width, size / texture.Height));
 
         var apron = mesh.AddMaterial(concrete);
-        var steel = mesh.AddMaterial(Material("tower_steel", new float3(0.55f, 0.16f, 0.08f), 0.3f, 0.55f));
-        var white = mesh.AddMaterial(Material("water_tank", new float3(0.85f, 0.85f, 0.82f), 0.2f, 0.4f));
+        var steel = mesh.AddMaterial(WeatheredPaint(mesh, "tower_steel", new float3(0.42f, 0.11f, 0.045f), recipe.Seed, 0.2f));
+        var white = mesh.AddMaterial(WeatheredPaint(mesh, "water_tank", new float3(0.72f, 0.73f, 0.70f), recipe.Seed + 1, 0.05f));
         var mast = mesh.AddMaterial(Material("mast", new float3(0.7f), 1, 0.3f));
 
         mesh.Box(new float3(-half, -depth, -half), new float3(half, 0, half), apron, uvMetres: size);
@@ -1014,6 +1082,31 @@ public static class Generators {
         mesh.Cylinder(0.22f, 0, pole.Y - 0.35f, galvanized, 16, float4x4.CreateTranslation(pole.X, 0, pole.Z));
 
         return mesh.Build(recipe.Output);
+
+    }
+
+    private static MaterialData WeatheredPaint(MeshBuilder mesh, string name, float3 paint, int seed, float metallic) {
+
+        var texture = new TextureBuilder(256, 256);
+
+        texture.Paint((u, v, t) => {
+
+            var grain = Noise.Fbm(u, v, 8, 4, seed);
+            var streak = Noise.Value(u * 64, v * 4, 64, seed + 17);
+            var corrosion = SmoothStep(0.64f, 0.85f, grain + 0.2f * streak);
+            t.Color = float3.Lerp(paint * (0.73f + 0.32f * grain) * (0.8f + 0.2f * streak), new float3(0.12f, 0.045f, 0.018f), corrosion);
+            t.Metallic = metallic * (1 - corrosion);
+            t.Roughness = 0.48f + 0.35f * grain + 0.15f * corrosion;
+            t.Height = -corrosion * 0.001f;
+
+        });
+
+        var material = Material(name, new float3(1), 1, 1);
+        material.BaseColorTexture = mesh.AddTexture(texture.BaseColor(name + "_basecolor"));
+        material.MetallicRoughnessTexture = mesh.AddTexture(texture.MetallicRoughness(name + "_orm"));
+        material.NormalTexture = mesh.AddTexture(texture.Normal(name + "_normal", 1f / texture.Width, 1f / texture.Height));
+
+        return material;
 
     }
 

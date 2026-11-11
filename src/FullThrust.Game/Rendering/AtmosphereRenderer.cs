@@ -41,7 +41,7 @@ public sealed class AtmosphereRenderer : IRenderPass, IFrameUniformsWriter {
     private readonly FloatingOrigin _origin;
 
     private const int MaxTables = 5;
-    private const int MaxOutputs = 6;
+    private const int MaxOutputs = 7;
 
     private readonly VkSampler _sampler;
     private readonly VkDescriptorPool _pool;
@@ -84,7 +84,8 @@ public sealed class AtmosphereRenderer : IRenderPass, IFrameUniformsWriter {
 
         _aerialPerspective = new Table(this, shaders, frames, "aerial_perspective.comp",
             new Output("AerialPerspective", AerialWidth, AerialHeight, AerialSlices, GlobalBindings.AerialPerspective),
-            new Output("SkyShafts", AerialWidth, AerialHeight, 1, GlobalBindings.SkyShafts));
+            new Output("SkyShafts", AerialWidth, AerialHeight, 1, GlobalBindings.SkyShafts),
+            new Output("AerialTransmittance", AerialWidth, AerialHeight, AerialSlices, GlobalBindings.AerialTransmittance));
 
     }
 

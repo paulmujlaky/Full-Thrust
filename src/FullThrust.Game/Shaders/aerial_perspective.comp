@@ -6,6 +6,7 @@ layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(set = 1, binding = 0, rgba16f) uniform writeonly image3D target;
 layout(set = 1, binding = 1, rgba16f) uniform writeonly image2D shafts;
+layout(set = 1, binding = 2, rgba16f) uniform writeonly image3D transmittanceTarget;
 
 const int StepsPerSlice = 2;
 
@@ -86,6 +87,7 @@ void main() {
         }
 
         imageStore(target, ivec3(column, k), vec4(result.luminance, dot(result.transmittance, vec3(1.0 / 3.0))));
+        imageStore(transmittanceTarget, ivec3(column, k), vec4(result.transmittance, 1.0));
 
         start = end;
 

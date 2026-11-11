@@ -528,7 +528,8 @@ void main() {
         vec3 scattering = mix(body.shallowWater.rgb, body.deepWater.rgb, smoothstep(0.0, 250.0, depth));
 
         OceanSurface water = Ocean(vDetail, transpose(toWorld) * up, time, metresPerPixel);
-        float foam = ShoreFoam(vDetail, depth, time);
+        // From afar the metre-wide surf band smears across whole triangles into a pale coastline.
+        float foam = ShoreFoam(vDetail, depth, time) * (1.0 - smoothstep(1.0, 6.0, metresPerPixel));
 
         s.albedo = mix(s.albedo * transmittance + scattering * (1.0 - transmittance), vec3(0.8), foam);
         s.metallic = 0.0;
