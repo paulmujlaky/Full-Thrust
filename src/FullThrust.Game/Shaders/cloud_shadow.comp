@@ -62,8 +62,8 @@ void main() {
     float dt = (end - start) / float(Steps);
     float depth = 0.0;
 
-    // Wisps are finer than a texel's worth of shadow, so the footprint is set to drop them.
-    volumeFootprint = 2.0 * texelSize;
+    // Wisps finer than a texel or a step alias differently each time the map moves under the camera, which shimmers on the ground.
+    volumeFootprint = max(3.0 * texelSize, dt);
 
     for (int i = 0; i < Steps; i++) {
 

@@ -40,6 +40,8 @@ sh run.sh --rocket harrier --scenario launchpad --throttle 1 --stage 1 --sas --a
 
 On Windows, `./tools/Capture-Visuals.ps1` builds Release once and captures the launchpad, liftoff, and capsule views. Select other views and resolution with `./tools/Capture-Visuals.ps1 -View staging,earth,moon,reentry -Window 2560x1440`. Each view writes one PNG under `captures/visual-review`. Use `-Output` to keep a separate comparison run.
 
+To hunt flicker, `--capture-tail N` writes the last N consecutive frames, and `--disable-pass CloudShadows,ShadowMaps` switches render passes off by name (spaces optional).
+
 Use the `engines` and `night-pad` views to inspect nozzle alignment and pad lighting. In the game command line, `--camera-part engine-harrier-9` places the camera pivot on that part of the selected rocket.
 
 For a repeatable liftoff view, run the following command. After warmup each rendered frame advances the simulation by 1/60 of a second. The game writes the final frame and reports measured GPU time.

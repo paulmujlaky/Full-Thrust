@@ -80,6 +80,9 @@ layout(set = 0, binding = 0) uniform Frame {
     // x 1 when the point lights have shadow maps, y their near plane, z one over their resolution.
     vec4 lightShadow;
 
+    // xyz: a point fixed to the ground below, in render-local space; maps snap their texels to it.
+    vec4 groundAnchor;
+
 } frame;
 
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow shadowMap;
@@ -662,11 +665,12 @@ vec3 CloudShadowCenter(out vec3 u, out vec3 v) {
     u = normalize(cross(sun, side));
     v = cross(sun, u);
 
-    vec3 camera = frame.cameraPosition.xyz - frame.cloudShell.xyz;
+    // Counted from a point on the turning ground, not the planet's centre, so the grid neither slides under the clouds nor loses float precision.
+    vec3 camera = frame.cameraPosition.xyz - frame.groundAnchor.xyz;
     float texel = CloudShadowExtent / float(textureSize(cloudShadowMap, 0).x);
     vec2 snapped = floor(vec2(dot(camera, u), dot(camera, v)) / texel) * texel;
 
-    return frame.cloudShell.xyz + u * snapped.x + v * snapped.y;
+    return frame.groundAnchor.xyz + u * snapped.x + v * snapped.y;
 
 }
 

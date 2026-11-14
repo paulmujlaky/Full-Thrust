@@ -37,6 +37,12 @@ public sealed class SceneLighting {
     // Fraction of sunlight refracted through a planet's limb into its umbra, reddened on the way; what lights a moon in totality.
     private static readonly float3 UmbraGlow = new(1.2e-3f, 3e-4f, 6e-5f);
 
+    // Each re-pick of the anchor shifts shadow texels once, so it happens only this far from the last.
+    private const double ShadowAnchorReach = 20000;
+
+    private int _anchorBody = -1;
+    private double3 _anchor;
+
     private readonly float4[] _occluders = new float4[OccluderVectors.MaxOccluders];
     private readonly float4[] _occluderGlow = new float4[OccluderVectors.MaxOccluders];
 
@@ -80,6 +86,9 @@ public sealed class SceneLighting {
 
     public float3 GroundIrradiance { get; private set; }
 
+    // A point fixed to the ground below, relative to the camera; shadow maps snap their texels to it so shadows do not crawl as the body turns.
+    public float3 ShadowAnchor { get; private set; }
+
     public float Exposure => 1.0f / (1.2f * MathF.Pow(2.0f, Ev100));
 
     public PointLights SiteLights { get; } = new();
@@ -99,6 +108,7 @@ public sealed class SceneLighting {
         var offset = camera - system.StateAt(body.Index, universalTime).Position;
 
         UpdateOccluders(system, universalTime, camera);
+        UpdateShadowAnchor(body, universalTime, offset);
 
         if (Eclipse != EclipseTest.None && FindMoon(system) is { Parent: { } planet } moon) {
 
@@ -152,6 +162,24 @@ public sealed class SceneLighting {
 
         SkyIrradiance = SpaceMath.ToFloat((sky + floor) * AmbientScale);
         GroundIrradiance = SpaceMath.ToFloat((ground + floor * 0.5) * AmbientScale);
+
+    }
+
+    // Keeps a point on the ground below the camera that turns with the body, re-picked only once the camera has moved well away from it.
+    private void UpdateShadowAnchor(CelestialBody body, double universalTime, double3 offset) {
+
+        var rotation = body.RotationAt(universalTime);
+        var local = doubleQuat.Conjugate(rotation) * offset;
+        var nadir = local / Math.Max(local.Length(), 1e-9) * body.Radius;
+
+        if (body.Index != _anchorBody || (nadir - _anchor).Length() > ShadowAnchorReach) {
+
+            _anchorBody = body.Index;
+            _anchor = nadir;
+
+        }
+
+        ShadowAnchor = SpaceMath.ToFloat(rotation * _anchor - offset);
 
     }
 

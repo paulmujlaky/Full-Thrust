@@ -403,7 +403,16 @@ void main() {
     float covered = 0.0;
     float fade = 0.0;
 
-    if (pick[0] >= 0 && TileFade(metresPerPixel, scales[pick[0]] * 0.125) > 0.0) {
+    // Any pick whose coarse level still shows keeps detail on; gating on the heaviest alone cut the others off in a ring around the camera.
+    float coarsest = 1e9;
+
+    for (int i = 0; i < Picks; i++) {
+
+        coarsest = pick[i] >= 0 ? min(coarsest, scales[pick[i]]) : coarsest;
+
+    }
+
+    if (pick[0] >= 0 && TileFade(metresPerPixel, coarsest * 0.1173) > 0.0) {
 
         DetailSample samples[Picks];
         float heightWeight[Picks];
@@ -434,6 +443,15 @@ void main() {
         }
 
         float total = 0.0;
+        vec3 expected = vec3(0.0);
+
+        for (int i = 0; i < Picks; i++) {
+
+            expected += pick[i] < 0 ? vec3(0.0) : body.palette[pick[i]].rgb * pickWeight[i];
+
+        }
+
+        expected /= max(covered, 1e-4);
 
         // Height blending: the material standing proud of the others wins near a transition.
         for (int i = 0; i < Picks; i++) {
@@ -464,6 +482,9 @@ void main() {
             occlusion += w * samples[i].occlusion;
 
         }
+
+        // Detail keeps its pattern but averages to the macro colour, so fading it out with distance leaves no visible edge.
+        albedo *= macro / max(expected, vec3(1e-3));
 
     }
 

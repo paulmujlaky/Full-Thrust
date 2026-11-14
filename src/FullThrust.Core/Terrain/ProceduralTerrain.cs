@@ -7,6 +7,8 @@ public sealed class ProceduralTerrain : ITerrain {
 
     private const int MaxDetailOctaves = 28;
 
+    private static readonly doubleQuat MareLattice = doubleQuat.CreateFromAxisAngle(double3.Normalize(new double3(0.36, 0.8, 0.48)), 0.97);
+
     private readonly TerrainData _data;
     private readonly double _radius;
     private readonly GradientNoise _noise;
@@ -137,7 +139,11 @@ public sealed class ProceduralTerrain : ITerrain {
 
         height += Detail(d, resolution, 0.6 + 2.5 * mountainMask) * (0.3 + 0.7 * land);
 
-        var moisture = _noise.Fbm(p.X * 3.1 + 101.0, p.Y * 3.1 + 59.0, p.Z * 3.1 + 23.0, 4) * 1.4 + 0.5;
+        // Climate sets the broad belts; drainage and soil break them into patches a few kilometres across, so no plain is one colour.
+        var climate = _noise.Fbm(p.X * 3.1 + 101.0, p.Y * 3.1 + 59.0, p.Z * 3.1 + 23.0, 4) * 1.4 + 0.5;
+        var local = _noise.Fbm(p.X * 160.0 + 13.0, p.Y * 160.0 + 71.0, p.Z * 160.0 + 37.0, 4);
+        var patches = _noise.Fbm(p.X * 1300.0 + 5.0, p.Y * 1300.0 + 43.0, p.Z * 1300.0 + 89.0, 3);
+        var moisture = climate + 0.45 * local + 0.7 * patches;
 
         return new TerrainSample { Height = height, Moisture = (float)Math.Clamp(moisture, 0, 1), Feature = (float)(mountainMask * ridges) };
 
@@ -150,8 +156,12 @@ public sealed class ProceduralTerrain : ITerrain {
 
         var wx = _noise.Noise(p.X * 2.1 + 5.0, p.Y * 2.1 + 1.0, p.Z * 2.1 + 9.0);
         var wy = _noise.Noise(p.X * 2.1 + 2.0, p.Y * 2.1 + 8.0, p.Z * 2.1 + 3.0);
+        var wz = _noise.Noise(p.X * 2.1 + 7.0, p.Y * 2.1 + 4.0, p.Z * 2.1 + 6.0);
+        var warped = new double3(p.X + 0.45 * wx, p.Y + 0.45 * wy, p.Z + 0.45 * wz);
 
-        var field = _noise.Fbm(p.X + 0.3 * wx, p.Y + 0.3 * wy, p.Z, 5);
+        // Mare shores trace a contour near zero, which hugs one lattice's planes; two lattices turned against each other leave none straight.
+        var tilted = MareLattice * warped;
+        var field = (_noise.Fbm(warped.X + 0.37, warped.Y + 0.61, warped.Z + 0.19, 5) + _noise.Fbm(tilted.X + 3.7, tilted.Y + 1.3, tilted.Z + 8.9, 5)) * Math.Sqrt(0.5);
         var mare = SmoothStep(0.04, 0.16, field);
 
         var height = -_data.MareDepth * mare + Detail(d, resolution, 1.0 - 0.65 * mare);
@@ -206,7 +216,7 @@ public sealed class ProceduralTerrain : ITerrain {
             var by = Math.Floor(q.Y - 0.5);
             var bz = Math.Floor(q.Z - 0.5);
             // Doubled because only about half the candidate centres lie near enough the surface to be kept.
-            var density = Math.Min(1, 2 * _data.CraterDensity * (1 - 0.6 * mare));
+            var density = 2 * _data.CraterDensity * (1 - 0.6 * mare);
 
             for (var corner = 0; corner < 8; corner++) {
 
@@ -216,7 +226,10 @@ public sealed class ProceduralTerrain : ITerrain {
 
                 var h0 = Hash(cx, cy, cz, scale, 0);
 
-                if (h0 > density) {
+                // Density follows the mare under each point, so a crater on a shore fades out across it rather than ending in a cliff.
+                var presence = SmoothStep(0, 0.08, density - h0);
+
+                if (presence <= 0) {
 
                     continue;
 
@@ -243,6 +256,8 @@ public sealed class ProceduralTerrain : ITerrain {
 
                 var fresh = Hash(cx, cy, cz, scale, 5);
                 var depth = r * (0.2 + (0.06 - 0.2) * SmoothStep(1500, 25000, r)) * (0.4 + 0.6 * fresh);
+                depth *= presence;
+
                 var rim = 0.25 * depth;
 
                 if (distance < 1) {
@@ -270,7 +285,7 @@ public sealed class ProceduralTerrain : ITerrain {
                 var walls = SmoothStep(0.45, 0.98, distance) * (1 - SmoothStep(1.0, 1.35, distance));
                 var blanket = (0.25 + 0.75 * rays) * SmoothStep(0.82, 1.05, distance) * (1 - SmoothStep(1.0, reach, distance)) * young;
 
-                feature = Math.Max(feature, fresh * (0.2 * (1 - SmoothStep(0.5, 1.0, distance)) + 0.72 * walls * (0.25 + 0.75 * young) + blanket));
+                feature = Math.Max(feature, presence * fresh * (0.2 * (1 - SmoothStep(0.5, 1.0, distance)) + 0.72 * walls * (0.25 + 0.75 * young) + blanket));
 
             }
 

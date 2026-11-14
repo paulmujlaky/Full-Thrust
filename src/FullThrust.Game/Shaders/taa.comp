@@ -170,6 +170,15 @@ void main() {
     // Fast motion resamples history between texels each frame, so it is trusted a little less.
     float weight = mix(pc.params.x, 0.25, clamp(length(velocity * vec2(size)) / 40.0, 0.0, 1.0));
 
-    imageStore(resolved, pixel, vec4(Expand(max(FromYCoCg(mix(previous, current, weight)), vec3(0.0))), 1.0));
+    vec3 result = Expand(max(FromYCoCg(mix(previous, current, weight)), vec3(0.0)));
+
+    // One bad pixel kept in history would spread through every later frame and into the exposure meter.
+    if (any(isnan(result)) || any(isinf(result))) {
+
+        result = any(isnan(now)) || any(isinf(now)) ? vec3(0.0) : now;
+
+    }
+
+    imageStore(resolved, pixel, vec4(result, 1.0));
 
 }

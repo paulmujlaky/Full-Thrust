@@ -80,6 +80,9 @@ public sealed class GameOptions {
     // Replaces the shaded scene with a debug view for captures: "ao" or "cascades".
     public string? DebugView;
 
+    // Render passes switched off by name at start, for isolating what a pass contributes.
+    public string[] DisabledPasses = [];
+
     // Turns temporal anti-aliasing off, for before-and-after captures.
     public bool NoTaa;
 
@@ -111,6 +114,9 @@ public sealed class GameOptions {
     public int GcEvery;
 
     public int CaptureEvery;
+
+    // Consecutive frames captured at the end of the run, for spotting flicker between them.
+    public int CaptureTail;
 
 }
 
@@ -150,7 +156,6 @@ public sealed class GameApp : IDisposable {
     private VolumetricRenderer? _volumetrics;
     private PlumeSource? _plumes;
     private CloudSource? _clouds;
-    private TrailSource? _trails;
     private ReentrySource? _reentry;
     private ExposureController? _exposure;
     private BloomPass? _bloom;
@@ -372,9 +377,6 @@ public sealed class GameApp : IDisposable {
         _plumes = new PlumeSource(_world, _origin, _volumetrics.Lights, _parts, Path.Combine(AppContext.BaseDirectory, "data", "effects", "plumes.json"), _bodies);
         _volumetrics.AddSource(_plumes);
 
-        _trails = new TrailSource(_world, _bodies, _origin, _plumes);
-        _volumetrics.AddSource(_trails);
-
         _reentry = new ReentrySource(_world, _origin, _volumetrics.Lights);
         _volumetrics.AddSource(_reentry);
 
@@ -419,6 +421,17 @@ public sealed class GameApp : IDisposable {
         _renderer.AddPass(_bloom);
         _renderer.AddPass(new TonemapPass(_vulkan.Device, _renderer.Swapchain.RenderPass, shaders, _renderer.Hdr, _lighting, _bloom));
         _renderer.AddPass(new ImGuiPass(_debugUi.Renderer));
+
+        foreach (var pass in _renderer.Passes) {
+
+            // Spaces are optional, so names pass through a shell unquoted: --disable-pass CloudShadows,Volumetrics.
+            if (_options.DisabledPasses.Contains(pass.Name.Replace(" ", ""), StringComparer.OrdinalIgnoreCase)) {
+
+                pass.Enabled = false;
+
+            }
+
+        }
 
         return shapes;
 
@@ -476,11 +489,12 @@ public sealed class GameApp : IDisposable {
 
             }
 
-            if (smoke && warmupFrames >= 0 && (_options.CaptureEvery > 0 || _options.CaptureLast)) {
+            if (smoke && warmupFrames >= 0 && (_options.CaptureEvery > 0 || _options.CaptureLast || _options.CaptureTail > 0)) {
 
                 var measured = _stats.FrameCount - warmupFrames;
+                var tail = measured >= _options.SmokeFrames - _options.CaptureTail;
 
-                if (measured == _options.SmokeFrames - 1 || (!_options.CaptureLast && measured % _options.CaptureEvery == 0)) {
+                if (measured == _options.SmokeFrames - 1 || tail || (!_options.CaptureLast && _options.CaptureEvery > 0 && measured % _options.CaptureEvery == 0)) {
 
                     _renderer.Capture.Request(Path.Combine(_options.CaptureDirectory, $"{_scene.Rocket.Id}-{_options.Scenario}-{measured:D6}.png"));
                     capturing = true;
@@ -727,7 +741,6 @@ public sealed class GameApp : IDisposable {
         _terrain?.Prepare(_camera.Camera.Position, _clock.UniversalTime);
         _atmosphere?.Update(_camera.Camera.Position, _clock.UniversalTime);
         _clouds?.Update(_camera.Camera.Position, _clock.UniversalTime);
-        _trails?.Update(_clock.UniversalTime);
 
         _postEffects!.SuspendBlur = _warp.Rate > 1;
 

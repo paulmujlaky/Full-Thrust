@@ -102,6 +102,9 @@ public struct FrameUniforms {
     // x 1 when the point lights have shadow maps, y their near plane, z one over their resolution.
     public float4 LightShadow;
 
+    // xyz: a point fixed to the ground below, in render-local space; maps snap their texels to it.
+    public float4 GroundAnchor;
+
 }
 
 [InlineArray(MaxBodies)]

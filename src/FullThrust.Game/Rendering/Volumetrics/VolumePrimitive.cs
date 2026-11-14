@@ -10,7 +10,6 @@ public enum VolumeKind {
     NoiseSphere,
     Plume,
     CloudLayer,
-    Trail,
     Shock,
     GroundOutflow,
     Cirrus,

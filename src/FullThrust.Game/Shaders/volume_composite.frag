@@ -62,7 +62,8 @@ void main() {
 
     }
 
-    if (matched > 0.5) {
+    // The matching tap can carry no bilinear weight while the others match nothing, which would leave 0 / 0.
+    if (matched > 0.5 && weights > 1e-4) {
 
         outColor = sum / weights;
 

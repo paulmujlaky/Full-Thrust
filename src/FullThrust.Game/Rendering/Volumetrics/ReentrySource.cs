@@ -17,7 +17,12 @@ public sealed class ReentrySource : IVolumeSource {
     private const double PeakFlux = 2e6;
 
     // Radiance of the shock layer at peak heating, in cd/m2.
-    private const float PeakLuminance = 120000f;
+    private const float PeakLuminance = 200000f;
+
+    // Wake radius at the neck as a share of the nose radius, how fast it widens per metre beyond the plume's own 0.02, and its glow against the shock.
+    private const float WakeRadius = 0.55f;
+    private const float WakeSpread = -0.012f;
+    private const float WakeGlow = 0.5f;
 
     private static readonly float3 Dim = new(1.0f, 0.36f, 0.12f);
     private static readonly float3 Hot = new(1.0f, 0.72f, 0.66f);
@@ -75,7 +80,7 @@ public sealed class ReentrySource : IVolumeSource {
             Strength = MathF.Max(Strength, strength);
 
             var colour = float3.Lerp(Dim, Hot, strength);
-            var luminance = PeakLuminance * strength * strength;
+            var luminance = PeakLuminance * strength * MathF.Sqrt(strength);
             var downstream = -SpaceMath.ToFloat(upstream);
 
             // One shock wraps the whole windward line, so a capsule glows at its shield and a broadside stack wears a single sheath.
@@ -111,20 +116,22 @@ public sealed class ReentrySource : IVolumeSource {
             }
 
 
-            var wakeStart = _origin.ToLocal(craft.Position - upstream * back);
-            var wakeRadius = (float)nose;
-            var wakeLength = wakeRadius * (6 + 20 * strength);
+            // The flow closes in behind the shoulders into a neck, then trails as a thin streaming filament rather than a widening cone.
+            var wakeStart = _origin.ToLocal(craft.Position - upstream * (back * 0.6));
+            var wakeRadius = (float)nose * WakeRadius;
+            var wakeLength = (float)nose * (8 + 30 * strength);
+            var wakeEnd = wakeRadius + wakeLength * (WakeSpread + 0.02f);
 
             var wake = volumes.Add(new VolumePrimitive {
 
                 Kind = new int4((int)VolumeKind.Plume, 24, 1, 0),
-                Position = new float4(wakeStart + downstream * (wakeLength * 0.5f), MathF.Sqrt(wakeLength * wakeLength * 0.25f + wakeRadius * wakeRadius * 4)),
+                Position = new float4(wakeStart + downstream * (wakeLength * 0.5f), MathF.Sqrt(wakeLength * wakeLength * 0.25f + wakeEnd * wakeEnd * 4)),
                 Axis = new float4(downstream, wakeLength),
                 Medium = new float4(0.5f, 0.5f, 0.5f, 0),
-                Emission = new float4(colour * (luminance * 0.12f / (2 * wakeRadius)), 0.3f),
+                Emission = new float4(colour * (luminance * WakeGlow / (2 * wakeRadius)), 0.3f),
                 Params0 = new float4(wakeStart, wakeRadius),
-                Params1 = new float4(0.06f, 1, 0, 0),
-                Params2 = new float4(1.0f, 0.55f, 0.5f, 0.15f),
+                Params1 = new float4(WakeSpread, 1, 0, 0),
+                Params2 = new float4(1.0f, 0.45f, 0.55f, 0.35f),
 
             });
 

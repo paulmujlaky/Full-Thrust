@@ -81,7 +81,7 @@ public sealed class TerrainPalette {
         var latitude = MathF.Abs((float)Math.Asin(Math.Clamp(direction.Y, -1, 1))) * (180 / MathF.PI);
 
         // Subtropical deserts and wetter mid-latitudes, broken up by the moisture field.
-        var arid = Step(0.62f, 0.25f, sample.Moisture) * (1 - Step(18, 38, MathF.Abs(latitude - 26)) * 0.7f);
+        var arid = Step(0.62f, 0.15f, sample.Moisture) * (1 - Step(18, 38, MathF.Abs(latitude - 26)) * 0.7f);
         var dry = Math.Clamp(arid + Step(1200, 2600, height) * 0.4f, 0, 1);
         var highland = Step(900, 2800, height);
         var beach = Step(5, 1, height);

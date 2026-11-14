@@ -26,11 +26,6 @@ public sealed class PlumeStyleData {
     // How far the hot core near the nozzle washes out towards white.
     public double CoreWhiteness { get; set; } = 0.6;
 
-    // Smoke left in dense air, as extinction per metre across a fresh trail, and its colour.
-    public double Trail { get; set; }
-
-    public double[] TrailAlbedo { get; set; } = [0.8, 0.8, 0.8];
-
 }
 
 public sealed class PlumeStylesData {
@@ -273,12 +268,16 @@ public sealed class PlumeSource : IVolumeSource {
         var core = new float3((float)style.Core[0], (float)style.Core[1], (float)style.Core[2]);
         var emission = core * (float)(style.Brightness * CoreLuminance * throttle / (2 * exitRadius));
 
+        // Expanded into near vacuum the exhaust is too thin to darken anything; what little it holds scatters sunlight brightly.
+        var albedo = float3.Lerp(new float3((float)style.Albedo[0], (float)style.Albedo[1], (float)style.Albedo[2]), new float3(0.85f), thin);
+        var soot = (float)style.Soot * throttle / exitRadius * (1 - 0.9f * thin);
+
         return new VolumePrimitive {
 
             Kind = new int4((int)VolumeKind.Plume, 32, 2, 0),
             Position = new float4(center, bound),
             Axis = new float4(axis, length),
-            Medium = new float4((float)style.Albedo[0], (float)style.Albedo[1], (float)style.Albedo[2], (float)style.Soot * throttle / exitRadius),
+            Medium = new float4(albedo, soot),
             Emission = new float4(emission, 0.3f),
             Params0 = new float4(exit, exitRadius),
             Params1 = new float4(spread, diamondSpacing, diamonds, thin),

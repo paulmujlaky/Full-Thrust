@@ -3,13 +3,10 @@
 const int VolumeNoiseSphere = 1;
 const int VolumePlume = 2;
 const int VolumeCloudLayer = 3;
-const int VolumeTrail = 4;
-const int VolumeShock = 5;
-const int VolumeGroundOutflow = 6;
-const int VolumeCirrus = 7;
+const int VolumeShock = 4;
+const int VolumeGroundOutflow = 5;
+const int VolumeCirrus = 6;
 
-// Metres per period of the noise in exhaust trails; matches TrailSource.NoiseScale.
-const float TrailNoiseScale = 40.0;
 // Mirrors VolumePrimitive in Rendering/Volumetrics/VolumePrimitive.cs.
 struct VolumePrimitive {
 
@@ -315,6 +312,21 @@ VolumeSample Plume(VolumePrimitive v, vec3 p) {
     float cooling = pow(dilution, mix(0.5, 1.13, v.params1.w));
     s.emission = hot * profile * cooling * along * turbulence + mix(v.emission.rgb, white, 0.6) * diamonds * 0.85;
 
+    // In thin air the flow fans out widely, but its hot inviscid core stays narrow for many exit diameters; the fan is left as a faint halo.
+    float thin = v.params1.w;
+
+    if (thin > 0.0) {
+
+        float coreRadius = exitRadius + x * 0.07;
+        float coreProfile = exp(-2.5 * (r * r) / (coreRadius * coreRadius));
+        float coreDilution = exitRadius * exitRadius / (coreRadius * coreRadius);
+        float coreAlong = exp(-x / (exitRadius * 18.0)) * smoothstep(0.0, exitRadius * 0.3, x);
+        vec3 coreGlow = mix(v.emission.rgb * mix(vec3(1.0), v.params2.rgb, smoothstep(0.2, 1.0, r / coreRadius)), white, v.params2.w * exp(-x / (exitRadius * 6.0)));
+
+        s.emission = mix(s.emission, s.emission * 0.35 + coreGlow * coreProfile * sqrt(coreDilution) * coreAlong * turbulence, thin);
+
+    }
+
     return s;
 
 }
@@ -409,41 +421,6 @@ VolumeSample CloudLayer(VolumePrimitive v, vec3 p) {
 
 }
 
-// Exhaust trail capsule: params0 and params1 the older and newer ends with radii, medium.w and params2.w their extinctions, axis turns into the body-fixed noise placed by params2.xyz.
-VolumeSample Trail(VolumePrimitive v, vec3 p) {
-
-    VolumeSample s;
-
-    s.extinction = 0.0;
-    s.emission = vec3(0.0);
-
-    vec3 a = v.params0.xyz;
-    vec3 ab = v.params1.xyz - a;
-    float t = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
-    vec3 coord = QuaternionRotate(v.axis, p - a) / TrailNoiseScale + v.params2.xyz;
-
-    // Slow swells bulge the column into the puffs a rising exhaust cloud breaks into.
-    float swell = 0.7 + 0.6 * texture(shapeNoise, coord * 0.3).g;
-    float radial = length(p - a - ab * t) / (mix(v.params0.w, v.params1.w, t) * swell);
-
-    if (radial >= 1.0) {
-
-        return s;
-
-    }
-
-    float shape = texture(shapeNoise, coord).r;
-    float erosion = texture(detailNoise, coord * 3.0).r;
-
-    float base = (1.0 - smoothstep(0.15, 1.0, radial)) * (0.3 + 0.7 * shape);
-    float density = clamp(Remap(base, 0.15 + 0.35 * erosion, 1.0, 0.0, 1.0), 0.0, 1.0);
-
-    s.extinction = density * mix(v.medium.w, v.params2.w, t);
-
-    return s;
-
-}
-
 // Bow shock: a glowing paraboloid swept along the windward line from params0 (near end, nose radius) to params1 (far end, its relative glow), opening down axis.xyz for axis.w metres.
 VolumeSample Shock(VolumePrimitive v, vec3 p) {
 
@@ -481,8 +458,12 @@ VolumeSample Shock(VolumePrimitive v, vec3 p) {
 
     // Hottest in the layer pressed against the nose where the shock stands normal; as it turns oblique down the flanks it barely glows.
     float fade = 1.0 - smoothstep(v.axis.w * 0.5, v.axis.w, x);
-    float cooling = exp(-max(x, 0.0) / (nose * 0.74));
-    float glow = (sheet + 0.38 * inside) * cooling * fade * (0.35 + streaks) * mix(1.0, v.params1.w, u);
+    float cooling = exp(-max(x, 0.0) / (nose * 0.45));
+
+    // Heating goes with the flow's speed normal to the shock, so the glow collapses down the flanks instead of outlining a ball around the craft.
+    float normal = 1.0 / (1.0 + slope * slope);
+    float oblique = normal * normal;
+    float glow = (sheet + 0.6 * inside) * oblique * cooling * fade * (0.35 + streaks) * mix(1.0, v.params1.w, u);
 
     s.emission = v.emission.rgb * mix(vec3(1.0, 0.38, 0.16), vec3(1.0), cooling) * glow;
     s.extinction = v.medium.w * glow;
@@ -512,12 +493,6 @@ VolumeSample SampleVolume(VolumePrimitive v, vec3 p) {
     if (v.kind.x == VolumeShock) {
 
         return Shock(v, p);
-
-    }
-
-    if (v.kind.x == VolumeTrail) {
-
-        return Trail(v, p);
 
     }
 
@@ -605,7 +580,7 @@ float SunOpticalDepth(VolumePrimitive v, vec3 p, vec3 sunDirection) {
 // Smoke between a sample and a light inside or beside it, so flame-lit billows shade their far sides.
 float LightOpticalDepth(VolumePrimitive v, vec3 p, vec3 toLight) {
 
-    if (v.kind.x != VolumeNoiseSphere && v.kind.x != VolumeGroundOutflow && v.kind.x != VolumeTrail) {
+    if (v.kind.x != VolumeNoiseSphere && v.kind.x != VolumeGroundOutflow) {
 
         return 0.0;
 

@@ -222,6 +222,14 @@ public sealed class ExposureController : IRenderPass, IResizeListener {
         var luminance = Math.Max(Math.Max(Math.Pow(2, total / weight), MeanShare * linear / weight), highlight / HighlightRange);
 
         luminance = Math.Max(luminance, brightSubject);
+
+        // A non-finite reading would stick in Ev100 for good, since adaptation only ever blends from it.
+        if (!double.IsFinite(luminance)) {
+
+            return;
+
+        }
+
         MeasuredLuminance = (float)luminance;
 
         if (!Automatic) {

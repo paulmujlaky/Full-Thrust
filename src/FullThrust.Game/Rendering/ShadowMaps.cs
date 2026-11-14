@@ -37,6 +37,8 @@ public sealed class ShadowMaps : IRenderPass, IFrameUniformsWriter {
     private readonly float[] _splits = new float[MaxCascades];
     private readonly float[] _texel = new float[MaxCascades];
 
+    private float3 _anchor;
+
     public unsafe ShadowMaps(DeviceEx device, int resolution) {
 
         _device = device;
@@ -209,13 +211,8 @@ public sealed class ShadowMaps : IRenderPass, IFrameUniformsWriter {
         // Whole steps of radius keep the texel size, and so the shadow edges, still while the camera climbs.
         radius = MathF.Pow(2, MathF.Ceiling(MathF.Log2(radius) * 8) / 8);
 
-        var center = eye + new float3(body.X, body.Y, body.Z) + up * (body.W * cosine);
         var texel = 2 * radius / HorizonResolution;
-
-        var x = MathF.Floor(float3.Dot(center, lightX) / texel) * texel;
-        var y = MathF.Floor(float3.Dot(center, lightY) / texel) * texel;
-
-        center = lightX * x + lightY * y + lightZ * float3.Dot(center, lightZ);
+        var center = Snap(eye + new float3(body.X, body.Y, body.Z) + up * (body.W * cosine), _anchor, texel, lightX, lightY, lightZ);
 
         var lightView = float4x4.CreateLookTo(center + lightZ * radius, -lightZ, lightY);
 
@@ -224,11 +221,26 @@ public sealed class ShadowMaps : IRenderPass, IFrameUniformsWriter {
 
     }
 
-    public void Update(in float4x4 view, in float4x4 projection, float3 sunDirection, float4 nearestBody) {
+    // Snaps a map centre to whole texels counted from the ground anchor, so the grid moves with the ground rather than sliding across it.
+    private static float3 Snap(float3 center, float3 anchor, float texel, float3 lightX, float3 lightY, float3 lightZ) {
+
+        var ax = float3.Dot(anchor, lightX);
+        var ay = float3.Dot(anchor, lightY);
+        var x = MathF.Floor((float3.Dot(center, lightX) - ax) / texel) * texel + ax;
+        var y = MathF.Floor((float3.Dot(center, lightY) - ay) / texel) * texel + ay;
+
+        return lightX * x + lightY * y + lightZ * float3.Dot(center, lightZ);
+
+    }
+
+    // The anchor is relative to the camera.
+    public void Update(in float4x4 view, in float4x4 projection, float3 sunDirection, float4 nearestBody, float3 anchor) {
 
         float4x4.Invert(view, out var inverseView);
 
         var eye = new float3(inverseView.W.X, inverseView.W.Y, inverseView.W.Z);
+
+        _anchor = eye + anchor;
         var back = new float3(inverseView.Z.X, inverseView.Z.Y, inverseView.Z.Z);
 
         var tanX = 1.0f / projection.X.X;
@@ -270,12 +282,7 @@ public sealed class ShadowMaps : IRenderPass, IFrameUniformsWriter {
             }
 
             var texel = 2 * radius / Resolution;
-            var center = eye - back * centerDistance;
-
-            var x = MathF.Floor(float3.Dot(center, lightX) / texel) * texel;
-            var y = MathF.Floor(float3.Dot(center, lightY) / texel) * texel;
-
-            center = lightX * x + lightY * y + lightZ * float3.Dot(center, lightZ);
+            var center = Snap(eye - back * centerDistance, _anchor, texel, lightX, lightY, lightZ);
 
             var lightView = float4x4.CreateLookTo(center + lightZ * radius, -lightZ, lightY);
 

@@ -370,6 +370,7 @@ public sealed class Renderer : IDisposable {
             InverseViewProjection = inverseViewProjection,
 
             CameraPosition = new float4(inverseView.W.X, inverseView.W.Y, inverseView.W.Z, 1),
+            GroundAnchor = new float4(new float3(inverseView.W.X, inverseView.W.Y, inverseView.W.Z) + lighting.ShadowAnchor, 1),
 
             SunDirection = new float4(lighting.SunDirection, lighting.SunCosAngularRadius),
             SunIlluminance = new float4(lighting.SunIlluminance, 0),
@@ -395,7 +396,7 @@ public sealed class Renderer : IDisposable {
 
         }
 
-        Shadows.Update(view, projection, lighting.SunDirection, lighting.Occluders[0]);
+        Shadows.Update(view, projection, lighting.SunDirection, lighting.Occluders[0], lighting.ShadowAnchor);
 
         for (var i = 0; i < _passes.Count; i++) {
 

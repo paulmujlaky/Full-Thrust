@@ -12,6 +12,9 @@ public sealed class VolumeNoise : IDisposable {
     private const int DetailSize = 32;
     private const int GroupSize = 4;
 
+    // Share of the coverage map's width cross-faded to close its dateline seam.
+    private const int WrapBandFraction = 32;
+
     private readonly DeviceEx _device;
 
     private readonly RenderTexture _shape;
@@ -35,7 +38,10 @@ public sealed class VolumeNoise : IDisposable {
         _shape = new RenderTexture(device, "VolumeShapeNoise", VkFormat.R8G8B8A8UNorm, ShapeSize, ShapeSize, ShapeSize);
         _detail = new RenderTexture(device, "VolumeDetailNoise", VkFormat.R8G8B8A8UNorm, DetailSize, DetailSize, DetailSize);
         using var pixels = Stb.Load(Path.Combine(AppContext.BaseDirectory, "data", "textures", "weather", "blue-marble-clouds.png"), 4);
-        _weather = new GpuTexture(uploader, "SatelliteCoverage", pixels.AsSpan(), pixels.Width, pixels.Height, srgb: false);
+        var band = Math.Max(1, pixels.Width / WrapBandFraction);
+        var wrapped = WrapLongitude(pixels.AsSpan(), pixels.Width, pixels.Height, band);
+
+        _weather = new GpuTexture(uploader, "SatelliteCoverage", wrapped, pixels.Width - band, pixels.Height, srgb: false);
         uploader.Flush();
 
         _setLayout = Descriptors.CreateLayout(device, [Descriptors.Binding(0, VkDescriptorType.StorageImage, VkShaderStageFlags.ComputeBit)]);
@@ -94,6 +100,39 @@ public sealed class VolumeNoise : IDisposable {
         Barriers.ComputeToShaders(cmd);
 
         _generated = true;
+
+    }
+
+    // The source's east and west edges do not meet, so its first columns are dropped and cross-faded into its last ones instead.
+    public static byte[] WrapLongitude(ReadOnlySpan<byte> rgba, int width, int height, int band) {
+
+        var outWidth = width - band;
+        var result = new byte[outWidth * height * 4];
+
+        for (var y = 0; y < height; y++) {
+
+            var row = rgba.Slice(y * width * 4, width * 4);
+            var target = result.AsSpan(y * outWidth * 4, outWidth * 4);
+
+            row[(band * 4)..].CopyTo(target);
+
+            for (var i = 0; i < band; i++) {
+
+                var t = (i + 1) / (float)(band + 1);
+                var s = t * t * (3 - 2 * t);
+                var x = outWidth - band + i;
+
+                for (var c = 0; c < 4; c++) {
+
+                    target[x * 4 + c] = (byte)MathF.Round(row[(width - band + i) * 4 + c] * (1 - s) + row[i * 4 + c] * s);
+
+                }
+
+            }
+
+        }
+
+        return result;
 
     }
 

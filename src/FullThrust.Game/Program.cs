@@ -36,6 +36,7 @@ options.SmokeWarpRate = Number("--warp", 1);
 options.SmokeThrottle = Number("--throttle", 0);
 options.CaptureEvery = (int)Number("--capture-every", 0);
 options.CaptureLast = args.Contains("--capture-last");
+options.CaptureTail = (int)Number("--capture-tail", 0);
 var captureFps = Number("--capture-fps", 0);
 
 if (captureFps > 0 && double.IsFinite(captureFps)) {
@@ -65,6 +66,7 @@ if (Value("--translate")?.Split(',') is [var tx, var ty, var tz]) {
 options.Headlight = args.Contains("--headlight");
 options.ShowTerrainLevels = args.Contains("--terrain-levels");
 options.DebugView = Value("--debug-view");
+options.DisabledPasses = Value("--disable-pass")?.Replace(" ", "").Split(',', StringSplitOptions.RemoveEmptyEntries) ?? [];
 options.Ev100 = Number("--ev100", double.NaN);
 options.Sun = Value("--sun");
 
