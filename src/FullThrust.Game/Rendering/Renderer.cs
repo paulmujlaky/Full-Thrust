@@ -28,6 +28,10 @@ public sealed class Renderer : IDisposable {
     private bool _recreateRequested;
     private bool _vsync;
 
+    private float4x4 _previousViewProjection;
+    private float2 _previousJitter;
+    private bool _hasPrevious;
+
     public Renderer(VulkanContext context, int2 framebufferSize, bool vsync, SceneLighting lighting) {
 
         _context = context;
@@ -44,8 +48,13 @@ public sealed class Renderer : IDisposable {
         Prepass = new DepthPrepass();
 
         Frames.WriteImage(GlobalBindings.ShadowMap, Shadows.View, Shadows.Sampler);
+        Frames.WriteImage(GlobalBindings.HorizonShadowMap, Shadows.HorizonView, Shadows.Sampler);
+
+        LightShadows = new LightShadowMaps(device, Shadows.RenderPass);
+        Frames.WriteImage(GlobalBindings.LightShadowMap, LightShadows.View, Shadows.Sampler);
 
         AddPass(Shadows);
+        AddPass(LightShadows);
         AddPass(Prepass);
         Capture = new FrameCapture(context);
         Profiler = new GpuProfiler(context);
@@ -83,6 +92,8 @@ public sealed class Renderer : IDisposable {
 
     public ShadowMaps Shadows { get; }
 
+    public LightShadowMaps LightShadows { get; }
+
     public DepthPrepass Prepass { get; }
 
     public SceneLighting Lighting { get; }
@@ -94,8 +105,13 @@ public sealed class Renderer : IDisposable {
     // Opaque and Transparent passes are built against this; Post and Overlay passes against Swapchain.RenderPass.
     public VkRenderPass SceneRenderPass => Hdr.OpaquePass;
 
-    // Depth-only pipelines built against this work for both the prepass and the shadow maps.
+    // The camera prepass: depth and screen-space velocity.
     public VkRenderPass DepthRenderPass => Hdr.DepthPass;
+
+    // Depth-only pipelines for the sun's cascades.
+    public VkRenderPass ShadowRenderPass => Shadows.RenderPass;
+
+    public IProjectionJitter? Jitter { get; set; }
 
     // Linear radiance before exposure; space is close to black.
     public float4 ClearColor { get; set; } = new(0, 0, 0, 1);
@@ -188,7 +204,26 @@ public sealed class Renderer : IDisposable {
 
         device.ResetFences([fence]);
 
-        WriteFrameUniforms(view, projection);
+        var unjittered = view * projection;
+        var offset = Jitter?.Offset(FramesRendered) ?? default;
+        var jitter = new float2(2 * offset.X / Swapchain.Extent.Width, 2 * offset.Y / Swapchain.Extent.Height);
+
+        // Clip x and y move by the jitter times w, which shifts every pixel by the same fraction.
+        projection.Z.X += jitter.X * projection.Z.W;
+        projection.Z.Y += jitter.Y * projection.Z.W;
+
+        if (!_hasPrevious) {
+
+            _previousViewProjection = unjittered;
+            _previousJitter = jitter;
+            _hasPrevious = true;
+
+        }
+
+        WriteFrameUniforms(view, projection, unjittered, jitter);
+
+        _previousViewProjection = unjittered;
+        _previousJitter = jitter;
 
         var cmd = _commandBuffers[_frame];
 
@@ -213,7 +248,7 @@ public sealed class Renderer : IDisposable {
         RecordOutside(frame, RenderStage.Prepare);
 
         // Reverse-Z: the far plane is depth 0.
-        BeginRenderPass(cmd, Hdr.DepthPass, Hdr.DepthFramebuffer, extent, [new VkClearValue { DepthStencil = new VkClearDepthStencilValue { Depth = 0.0f } }]);
+        BeginRenderPass(cmd, Hdr.DepthPass, Hdr.DepthFramebuffer, extent, [new VkClearValue { Color = new VkClearColorValue { Float32 = new float4(0, 0, 0, 0) } }, new VkClearValue { DepthStencil = new VkClearDepthStencilValue { Depth = 0.0f } }]);
         RecordStages(frame, RenderStage.Depth, RenderStage.Depth);
         cmd.EndRenderPass();
 
@@ -319,7 +354,7 @@ public sealed class Renderer : IDisposable {
 
     }
 
-    private void WriteFrameUniforms(float4x4 view, float4x4 projection) {
+    private void WriteFrameUniforms(float4x4 view, float4x4 projection, float4x4 unjittered, float2 jitter) {
 
         var lighting = Lighting;
         var viewProjection = view * projection;
@@ -347,6 +382,10 @@ public sealed class Renderer : IDisposable {
 
             Viewport = new float4(Swapchain.Extent.Width, Swapchain.Extent.Height, 1.0f / Swapchain.Extent.Width, 1.0f / Swapchain.Extent.Height),
 
+            PreviousViewProjection = _previousViewProjection,
+            UnjitteredViewProjection = unjittered,
+            Jitter = new float4(jitter.X, jitter.Y, _previousJitter.X, _previousJitter.Y),
+
         };
 
         for (var i = 0; i < OccluderVectors.MaxOccluders; i++) {
@@ -356,7 +395,7 @@ public sealed class Renderer : IDisposable {
 
         }
 
-        Shadows.Update(view, projection, lighting.SunDirection);
+        Shadows.Update(view, projection, lighting.SunDirection, lighting.Occluders[0]);
 
         for (var i = 0; i < _passes.Count; i++) {
 
@@ -369,6 +408,9 @@ public sealed class Renderer : IDisposable {
         }
 
         lighting.SiteLights.Fill(ref uniforms, true);
+
+        // Every light is in place now, so their shadow maps can be aimed.
+        LightShadows.Fill(ref uniforms);
         Frames.Write(_frame, uniforms);
 
     }

@@ -15,6 +15,10 @@ public sealed class TonemapPass : IRenderPass, IResizeListener {
         public float WhitePoint;
         public float BloomIntensity;
 
+        public float Flare;
+        public float Fringe;
+        public float Vignette;
+
     }
 
     private readonly DeviceEx _device;
@@ -87,9 +91,18 @@ public sealed class TonemapPass : IRenderPass, IResizeListener {
 
     public float WhitePoint { get; set; } = 8.0f;
 
+    // Share of very bright light that reflects inside the lens into ghosts and a halo; 0 for none.
+    public float LensFlare { get; set; } = 0.012f;
+
+    // Red and blue fringing at the corners, in pixels at 1080p; 0 for none.
+    public float ChromaticFringe { get; set; } = 0.8f;
+
+    // 0 for an even image, 1 for the full natural falloff of a wide lens towards the corners.
+    public float Vignette { get; set; } = 0.35f;
+
     public void OnResize(VkExtent2D extent) {
 
-        Descriptors.WriteImage(_device, _set, 0, _target.ColorView, _sampler);
+        Descriptors.WriteImage(_device, _set, 0, _target.PostView, _sampler, _target.PostLayout);
         Descriptors.WriteImage(_device, _set, 1, _bloom.View, _bloom.Sampler, VkImageLayout.General);
 
     }
@@ -100,7 +113,7 @@ public sealed class TonemapPass : IRenderPass, IResizeListener {
 
         cmd.BindPipeline(VkPipelineBindPoint.Graphics, _pipeline);
         cmd.BindDescriptorSet(VkPipelineBindPoint.Graphics, _layout, 0, _set, []);
-        cmd.PushConstants(_layout, VkShaderStageFlags.FragmentBit, ByteSize.Zero, new PushData { Tonemapper = (int)_lighting.Tonemapper, WhitePoint = WhitePoint, BloomIntensity = _bloom.Intensity });
+        cmd.PushConstants(_layout, VkShaderStageFlags.FragmentBit, ByteSize.Zero, new PushData { Tonemapper = (int)_lighting.Tonemapper, WhitePoint = WhitePoint, BloomIntensity = _bloom.Intensity, Flare = LensFlare, Fringe = ChromaticFringe * frame.Extent.Height / 1080.0f, Vignette = Vignette });
         cmd.Draw(3, 1, 0, 0);
 
     }

@@ -11,6 +11,11 @@ layout(push_constant) uniform Push {
     float whitePoint;
     float bloomIntensity;
 
+    // Lens: share of bright light thrown into ghosts and a halo, colour fringing at the corners in pixels, and how far the corners darken.
+    float flare;
+    float fringe;
+    float vignette;
+
 } pc;
 
 layout(location = 0) out vec4 outColor;
@@ -146,10 +151,73 @@ vec3 ResolveEdges(vec2 uv) {
 
 }
 
+// Only light far past white is bright enough for its reflections inside the lens to show.
+vec3 Glare(vec2 uv) {
+
+    vec2 inside = step(vec2(0.0), uv) * step(uv, vec2(1.0));
+
+    return min(max(texture(bloom, uv).rgb - 8.0, vec3(0.0)), vec3(60.0)) * inside.x * inside.y;
+
+}
+
+// Reflections between lens elements: ghosts strung through the image centre opposite each bright source, and a faint ring around it.
+vec3 LensFlare(vec2 uv) {
+
+    vec2 across = vec2(0.5) - uv;
+    vec3 flare = vec3(0.0);
+
+    const float scales[4] = float[](0.6, 1.1, 1.7, 2.4);
+    const vec3 tints[4] = vec3[](vec3(1.0, 0.7, 0.5), vec3(0.6, 0.8, 1.0), vec3(0.8, 1.0, 0.7), vec3(0.7, 0.6, 1.0));
+
+    for (int i = 0; i < 4; i++) {
+
+        vec2 ghost = vec2(0.5) + across * scales[i];
+        float fade = 1.0 - smoothstep(0.2, 0.7, length(ghost - 0.5));
+
+        flare += Glare(ghost) * tints[i] * fade * (0.5 / float(i + 1));
+
+    }
+
+    float aspect = float(textureSize(hdr, 0).x) / float(textureSize(hdr, 0).y);
+    vec2 ring = normalize(across * vec2(aspect, 1.0)) * vec2(1.0 / aspect, 1.0) * 0.38;
+
+    flare += Glare(uv + ring) * vec3(0.9, 0.8, 1.0) * 0.35;
+
+    return flare;
+
+}
+
 void main() {
 
+    vec2 centred = vUv - 0.5;
+    float aspect = float(textureSize(hdr, 0).x) / float(textureSize(hdr, 0).y);
+    float corner = dot(centred * vec2(aspect, 1.0), centred * vec2(aspect, 1.0)) / (0.25 * (aspect * aspect + 1.0));
+
+    vec3 scene = ResolveEdges(vUv);
+
+    if (pc.fringe > 0.0) {
+
+        // A simple lens focuses red and blue at slightly different magnifications, more so towards the corners.
+        vec2 spread = centred * corner * pc.fringe / vec2(textureSize(hdr, 0)) * 2.0;
+
+        scene.r = texture(hdr, vUv + spread).r;
+        scene.b = texture(hdr, vUv - spread).b;
+
+    }
+
     // Energy-conserving: bloom takes its share of the image rather than adding light.
-    vec3 color = mix(ResolveEdges(vUv), texture(bloom, vUv).rgb, pc.bloomIntensity);
+    vec3 color = mix(scene, texture(bloom, vUv).rgb, pc.bloomIntensity);
+
+    if (pc.flare > 0.0) {
+
+        color += LensFlare(vUv) * pc.flare;
+
+    }
+
+    // Light reaching the corners crosses the lens obliquely and is spread over more of the sensor.
+    float falloff = 1.0 / (1.0 + corner * 0.9);
+
+    color *= mix(1.0, falloff * falloff, pc.vignette);
 
     vec3 mapped;
 

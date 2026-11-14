@@ -67,6 +67,7 @@ void main() {
 
     s.geometricNormal = geometric;
     s.relief = 0.0;
+    s.regolith = 0.0;
 
     s.occlusion *= ScreenOcclusion(gl_FragCoord.xy, s.albedo);
     s.albedo *= CascadeTint(vWorldPosition);

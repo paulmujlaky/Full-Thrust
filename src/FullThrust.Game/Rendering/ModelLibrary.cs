@@ -245,7 +245,7 @@ public sealed class ModelLibrary : IDisposable {
     }
 
     // Records every instance of a catalog model; entity is the render-local placement of its owner.
-    public void Draw(CommandBuffer cmd, VkPipelineLayout layout, VkPipeline single, VkPipeline both, VkPipeline cutout, int definition, in float4x4 entity, in float4x4 entityRotation, in Frustum frustum, bool depthOnly, int cascade) {
+    public void Draw(CommandBuffer cmd, VkPipelineLayout layout, VkPipeline single, VkPipeline both, VkPipeline cutout, int definition, in float4x4 entity, in float4x4 previousEntity, in Frustum frustum, bool depthOnly, int cascade) {
 
         ref readonly var placement = ref _placements[definition];
 
@@ -266,14 +266,14 @@ public sealed class ModelLibrary : IDisposable {
         for (var i = 0; i < placement.Locals.Length; i++) {
 
             var world = placement.Locals[i] * entity;
-            var normal = placement.Normals[i] * entityRotation;
+            var before = placement.Locals[i] * previousEntity;
 
             var push = new MeshPush {
 
                 Model = world,
-                Normal0 = new float4(normal.X.X, normal.X.Y, normal.X.Z, 0),
-                Normal1 = new float4(normal.Y.X, normal.Y.Y, normal.Y.Z, 0),
-                Normal2 = new float4(normal.Z.X, normal.Z.Y, normal.Z.Z, 0),
+                Previous0 = new float4(before.X.X, before.Y.X, before.Z.X, before.W.X),
+                Previous1 = new float4(before.X.Y, before.Y.Y, before.Z.Y, before.W.Y),
+                Previous2 = new float4(before.X.Z, before.Y.Z, before.Z.Z, before.W.Z),
 
                 View = new int4(cascade, 0, 0, 0),
 
@@ -479,9 +479,10 @@ public struct MeshPush {
 
     public float4x4 Model;
 
-    public float4 Normal0;
-    public float4 Normal1;
-    public float4 Normal2;
+    // Rows of last frame's model matrix, in last frame's render-local space.
+    public float4 Previous0;
+    public float4 Previous1;
+    public float4 Previous2;
 
     // x: shadow cascade the depth-only shaders project into.
     public int4 View;

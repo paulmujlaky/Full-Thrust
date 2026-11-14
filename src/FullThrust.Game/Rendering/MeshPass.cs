@@ -28,8 +28,14 @@ public sealed class MeshPass : IRenderPass, IDepthCaster {
     private readonly VkPipeline _shadow;
     private readonly VkPipeline _cutoutDepth;
     private readonly VkPipeline _cutoutShadow;
+    private readonly VkPipeline _lightShadow;
+    private readonly VkPipeline _cutoutLightShadow;
 
-    public unsafe MeshPass(DeviceEx device, VkRenderPass renderPass, VkRenderPass depthPass, VkDescriptorSetLayout frameLayout, ShaderLibrary shaders, World world, FloatingOrigin origin, ModelLibrary models, Camera camera) {
+    // Entity placements of this frame and the last, each in its own frame's render-local space.
+    private Dictionary<Entity, float4x4> _previous = new(512);
+    private Dictionary<Entity, float4x4> _current = new(512);
+
+    public unsafe MeshPass(DeviceEx device, VkRenderPass renderPass, VkRenderPass depthPass, VkRenderPass shadowPass, VkDescriptorSetLayout frameLayout, ShaderLibrary shaders, World world, FloatingOrigin origin, ModelLibrary models, Camera camera) {
 
         _device = device;
         _world = world;
@@ -62,8 +68,7 @@ public sealed class MeshPass : IRenderPass, IDepthCaster {
         _doubleSided = Pipelines.Create(device, shaders, desc);
 
         desc.RenderPass = depthPass;
-        desc.DepthOnly = true;
-        desc.FragmentShader = null;
+        desc.FragmentShader = "velocity.frag";
         desc.Cull = VkCullModeFlags.BackBit;
 
         _depthSingleSided = Pipelines.Create(device, shaders, desc);
@@ -74,11 +79,18 @@ public sealed class MeshPass : IRenderPass, IDepthCaster {
 
         desc.FragmentShader = "mesh_cutout.frag";
         _cutoutDepth = Pipelines.Create(device, shaders, desc);
+
+        desc.RenderPass = shadowPass;
+        desc.DepthOnly = true;
         desc.VertexShader = "mesh_shadow.vert";
         desc.ShadowCaster = true;
 
         _cutoutShadow = Pipelines.Create(device, shaders, desc);
+        desc.ClipNear = true;
+        _cutoutLightShadow = Pipelines.Create(device, shaders, desc);
         desc.FragmentShader = null;
+        _lightShadow = Pipelines.Create(device, shaders, desc);
+        desc.ClipNear = false;
         _shadow = Pipelines.Create(device, shaders, desc);
 
     }
@@ -106,18 +118,33 @@ public sealed class MeshPass : IRenderPass, IDepthCaster {
 
         DrawCount = _models.DrawCalls;
 
+        // The prepass recorded where everything is this frame; next frame measures motion against it.
+        (_previous, _current) = (_current, _previous);
+        _current.Clear();
+
     }
 
     public void RecordDepth(in DepthContext context) {
 
+        if (context.View == DepthView.Horizon) {
+
+            return;
+
+        }
+
         var cmd = context.CommandBuffer;
-        var single = context.View == DepthView.Shadow ? _shadow : _depthSingleSided;
-        var both = context.View == DepthView.Shadow ? _shadow : _depthDoubleSided;
+
+        var (single, both, cutout) = context.View switch {
+
+            DepthView.Shadow => (_shadow, _shadow, _cutoutShadow),
+            DepthView.Light => (_lightShadow, _lightShadow, _cutoutLightShadow),
+            _ => (_depthSingleSided, _depthDoubleSided, _cutoutDepth),
+
+        };
 
         cmd.BindPipeline(VkPipelineBindPoint.Graphics, single);
         cmd.BindDescriptorSet(VkPipelineBindPoint.Graphics, _layout, 0, context.FrameSet, []);
 
-        var cutout = context.View == DepthView.Shadow ? _cutoutShadow : _cutoutDepth;
         DrawAll(cmd, single, both, cutout, context.Frustum, true, context.Cascade);
 
     }
@@ -137,11 +164,23 @@ public sealed class MeshPass : IRenderPass, IDepthCaster {
             var rotation = float4x4.CreateFromQuaternion(SpaceMath.ToFloat(transform.Rotation));
             var entity = rotation * float4x4.CreateTranslation(_origin.ToLocal(transform.Position));
 
-            _models.Draw(cmd, _layout, single, both, cutout, row.C2.Model, entity, rotation, frustum, depthOnly, cascade);
+            if (!_previous.TryGetValue(row.Entity, out var before)) {
+
+                before = entity;
+
+            }
+
+            if (depthOnly && cascade < 0) {
+
+                _current[row.Entity] = entity;
+
+            }
+
+            _models.Draw(cmd, _layout, single, both, cutout, row.C2.Model, entity, before, frustum, depthOnly, cascade);
 
             if (row.C2.Shroud is { } shroud) {
 
-                _models.Draw(cmd, _layout, single, both, cutout, shroud, entity, rotation, frustum, depthOnly, cascade);
+                _models.Draw(cmd, _layout, single, both, cutout, shroud, entity, before, frustum, depthOnly, cascade);
 
             }
 
@@ -158,6 +197,8 @@ public sealed class MeshPass : IRenderPass, IDepthCaster {
         _device.DestroyPipeline(_shadow, null);
         _device.DestroyPipeline(_cutoutDepth, null);
         _device.DestroyPipeline(_cutoutShadow, null);
+        _device.DestroyPipeline(_lightShadow, null);
+        _device.DestroyPipeline(_cutoutLightShadow, null);
         _device.DestroyPipelineLayout(_layout, null);
 
     }

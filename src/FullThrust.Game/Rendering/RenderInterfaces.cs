@@ -101,6 +101,12 @@ public enum DepthView {
     Camera,
     Shadow,
 
+    // The planet-scale shadow map; only terrain is large enough to matter in it.
+    Horizon,
+
+    // One face of the cube around a point light; only meshes cast into it.
+    Light,
+
 }
 
 public readonly struct DepthContext {
@@ -111,7 +117,7 @@ public readonly struct DepthContext {
 
     public readonly DepthView View;
 
-    // Shadow cascade index, or -1 for the camera.
+    // Index of the shadow matrix to project with, or -1 for the camera.
     public readonly int Cascade;
 
     public readonly Frustum Frustum;
@@ -134,6 +140,14 @@ public interface IDepthCaster {
     bool CastsDepth { get; }
 
     void RecordDepth(in DepthContext context);
+
+}
+
+// Moves the projection a fraction of a pixel each frame so temporal accumulation sees every part of a pixel.
+public interface IProjectionJitter {
+
+    // Offset in pixels within [-0.5, 0.5]; zero turns jitter off.
+    float2 Offset(long frame);
 
 }
 

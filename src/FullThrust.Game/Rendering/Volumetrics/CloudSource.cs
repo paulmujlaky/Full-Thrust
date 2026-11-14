@@ -7,8 +7,8 @@ namespace FullThrust.Game.Rendering.Volumetrics;
 // One cumulus layer per body with cloud data, turning with the planet and drifting on the wind.
 public sealed class CloudSource : IVolumeSource, IFrameUniformsWriter {
 
-    // Beyond this many radii a planet's clouds are too small to march.
-    private const double MaxDistanceRadii = 40;
+    // Beyond this many radii the planet is a few pixels across at any zoom, and its clouds no longer show.
+    private const double MaxDistanceRadii = 2500;
 
     private readonly CelestialSystem _system;
     private readonly FloatingOrigin _origin;
@@ -131,7 +131,7 @@ public sealed class CloudSource : IVolumeSource, IFrameUniformsWriter {
 
         // World to body-fixed, so the weather map turns with the ground below it.
         var drift = clouds.WindSpeed * _time;
-        var turn = body.RotationAt(_time) * doubleQuat.CreateFromAxisAngle(double3.UnitY, drift / body.Radius);
+        var turn = body.RotationAt(_time) * doubleQuat.CreateFromAxisAngle(double3.UnitY, drift / body.Radius + clouds.WeatherLongitudeDeg * Math.PI / 180);
         var rotation = new doubleQuat(-turn.X, -turn.Y, -turn.Z, turn.W);
 
         return new VolumePrimitive {

@@ -8,6 +8,7 @@ public sealed class HdrTarget : IDisposable {
 
     public const VkFormat ColorFormat = VkFormat.R16G16B16A16SFloat;
     public const VkFormat DepthFormat = VkFormat.D32SFloat;
+    public const VkFormat VelocityFormat = VkFormat.R16G16SFloat;
 
     private readonly DeviceEx _device;
 
@@ -17,11 +18,23 @@ public sealed class HdrTarget : IDisposable {
     private ImageEx? _depth;
     private ImageViewEx _depthView;
 
+    private ImageEx? _velocity;
+    private ImageViewEx _velocityView;
+
     public HdrTarget(DeviceEx device, VkExtent2D extent) {
 
         _device = device;
 
-        DepthPass = RenderPasses.Create(device, null, new AttachmentDesc {
+        DepthPass = RenderPasses.Create(device, new AttachmentDesc {
+
+            Format = VelocityFormat,
+            Load = VkAttachmentLoadOp.Clear,
+            Store = VkAttachmentStoreOp.Store,
+            Initial = VkImageLayout.Undefined,
+            Subpass = VkImageLayout.ColorAttachmentOptimal,
+            Final = VkImageLayout.ShaderReadOnlyOptimal,
+
+        }, new AttachmentDesc {
 
             Format = DepthFormat,
             Load = VkAttachmentLoadOp.Clear,
@@ -76,7 +89,7 @@ public sealed class HdrTarget : IDisposable {
 
     }
 
-    // Depth only; pipelines built against it also work in ShadowMaps.RenderPass.
+    // Depth plus screen-space velocity for temporal reprojection.
     public VkRenderPass DepthPass { get; }
 
     // Colour and depth; pipelines built against it also work in TransparentPass.
@@ -93,6 +106,21 @@ public sealed class HdrTarget : IDisposable {
     public VkImageView ColorView => _colorView.VkImageView;
 
     public VkImageView DepthView => _depthView.VkImageView;
+
+    public VkImageView VelocityView => _velocityView.VkImageView;
+
+    // What tonemapping and its inputs read: the scene colour, or the output of the last effect chained after it.
+    public VkImageView PostView { get; private set; }
+
+    public VkImageLayout PostLayout { get; private set; }
+
+    // Effects chain in pass order, each reading the current PostView before publishing its own output here.
+    public void SetPost(VkImageView view, VkImageLayout layout) {
+
+        PostView = view;
+        PostLayout = layout;
+
+    }
 
     public void Resize(VkExtent2D extent) {
 
@@ -114,6 +142,13 @@ public sealed class HdrTarget : IDisposable {
         _depth = depth;
         _depthView = depth.CreateImageView(VkImageViewType._2D, depth.GetFullRange(VkImageAspectFlags.DepthBit), null);
 
+        var velocity = CreateImage("HdrVelocity", VelocityFormat, VkImageUsageFlags.ColorAttachmentBit | VkImageUsageFlags.SampledBit);
+
+        _velocity = velocity;
+        _velocityView = velocity.CreateImageView(VkImageViewType._2D, velocity.GetFullRange(VkImageAspectFlags.ColorBit), null);
+
+        SetPost(_colorView.VkImageView, VkImageLayout.ShaderReadOnlyOptimal);
+
         var attachments = stackalloc VkImageView[2];
 
         attachments[0] = _colorView.VkImageView;
@@ -130,11 +165,13 @@ public sealed class HdrTarget : IDisposable {
 
         }, null);
 
+        attachments[0] = _velocityView.VkImageView;
+
         DepthFramebuffer = _device.CreateFramebuffer(new VkFramebufferCreateInfo {
 
             RenderPass = DepthPass,
-            AttachmentCount = 1,
-            Attachments = attachments + 1,
+            AttachmentCount = 2,
+            Attachments = attachments,
             Width = extent.Width,
             Height = extent.Height,
             Layers = 1,
@@ -171,7 +208,10 @@ public sealed class HdrTarget : IDisposable {
         _color?.Dispose();
         _depthView.Dispose();
         _depth?.Dispose();
+        _velocityView.Dispose();
+        _velocity?.Dispose();
 
+        _velocity = null;
         _color = null;
         _depth = null;
 

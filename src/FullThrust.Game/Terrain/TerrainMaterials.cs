@@ -21,7 +21,7 @@ public struct ChannelVectors {
 [StructLayout(LayoutKind.Sequential)]
 public struct TerrainBodyUniforms {
 
-    // w: 1 on bodies with an ocean; ShallowWater.w: city light luminance, 0 for none.
+    // w: 1 on bodies with an ocean, -1 on airless cratered ones shaded as regolith; ShallowWater.w: city light luminance, 0 for none.
     public float4 DeepWater;
     public float4 ShallowWater;
 
@@ -127,8 +127,8 @@ public sealed class TerrainMaterials : IDisposable {
             AddressModeV = VkSamplerAddressMode.Repeat,
             AddressModeW = VkSamplerAddressMode.Repeat,
             AnisotropyEnable = anisotropy > 1,
-            // Every pixel takes up to a dozen triplanar fetches; 16x anisotropy cost a third of the frame for little gain.
-            MaxAnisotropy = Math.Min(anisotropy, 4.0f),
+            // Every pixel takes up to a dozen triplanar fetches, so 16x costs two thirds more terrain time than 4x; 8x keeps grazing ground sharp for half that.
+            MaxAnisotropy = Math.Min(anisotropy, 8.0f),
             MaxLod = 32,
 
         }, null);
@@ -164,7 +164,7 @@ public sealed class TerrainMaterials : IDisposable {
 
         var result = new TerrainBodyUniforms {
 
-            DeepWater = new float4(palette.DeepWater, data.Ocean ? 1 : 0),
+            DeepWater = new float4(palette.DeepWater, data.Ocean ? 1 : data.Type == "cratered" ? -1 : 0),
             ShallowWater = new float4(palette.ShallowWater, (float)data.CityLights),
 
             Settlements = new float4((float)(radius / data.TownSpacing), (float)(radius / data.CitySpacing), (float)data.Settled, data.Seed & 0xFFFF),

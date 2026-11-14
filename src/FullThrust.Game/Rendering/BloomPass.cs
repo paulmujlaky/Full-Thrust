@@ -128,8 +128,8 @@ public sealed class BloomPass : IRenderPass, IResizeListener {
 
         for (var i = 0; i < Levels; i++) {
 
-            var source = i == 0 ? _target.ColorView : _down[i - 1].View;
-            var layout = i == 0 ? VkImageLayout.ShaderReadOnlyOptimal : VkImageLayout.General;
+            var source = i == 0 ? _target.PostView : _down[i - 1].View;
+            var layout = i == 0 ? _target.PostLayout : VkImageLayout.General;
 
             Descriptors.WriteImage(_device, _downSets[i], 0, source, _sampler, layout);
             Descriptors.WriteStorageImage(_device, _downSets[i], 1, _down[i].View);

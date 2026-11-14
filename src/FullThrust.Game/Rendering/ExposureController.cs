@@ -132,7 +132,7 @@ public sealed class ExposureController : IRenderPass, IResizeListener {
 
         foreach (var set in _sets) {
 
-            Descriptors.WriteImage(_device, set, 0, _target.ColorView, _sampler);
+            Descriptors.WriteImage(_device, set, 0, _target.PostView, _sampler, _target.PostLayout);
 
         }
 

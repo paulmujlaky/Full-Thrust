@@ -102,6 +102,9 @@ public sealed class CloudData {
 
     public double CirrusAltitude { get; set; }
 
+    // Turns the weather map about the axis, in degrees east, to choose which systems sit over which ground.
+    public double WeatherLongitudeDeg { get; set; }
+
 }
 
 // Coefficients per metre at sea level, after Hillaire 2020 for Earth.

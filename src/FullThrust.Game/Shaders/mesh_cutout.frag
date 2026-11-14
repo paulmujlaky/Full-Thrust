@@ -1,8 +1,13 @@
 #version 450
 
+#include "common.glsl"
 #include "mesh_material.glsl"
 
 layout(location = 3) in vec2 vUv;
+layout(location = 10) in vec4 vClip;
+layout(location = 11) in vec4 vPreviousClip;
+
+layout(location = 0) out vec2 outVelocity;
 
 void main() {
 
@@ -11,5 +16,7 @@ void main() {
         discard;
 
     }
+
+    outVelocity = ScreenVelocity(vClip, vPreviousClip);
 
 }

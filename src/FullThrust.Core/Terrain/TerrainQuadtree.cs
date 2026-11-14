@@ -41,6 +41,9 @@ public sealed class TerrainQuadtree {
 
     public double SplitDistance { get; set; } = 2.2;
 
+    // Edge lengths within which the last update split a node: SplitDistance times that update's detail scale.
+    public double SplitThreshold => _splitThreshold;
+
     public int MaxRequestsPerUpdate { get; set; } = 48;
 
     public ReadOnlySpan<TerrainNode> Selected => _selected.AsSpan(0, Count);

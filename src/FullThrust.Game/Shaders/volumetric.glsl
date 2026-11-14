@@ -46,10 +46,10 @@ struct VolumeSample {
 // Metres covered by one volume pixel at the current sample, set while marching; noise finer than this is faded out.
 float volumeFootprint = 0.0;
 
-// The first stretch of a spherical shell along a ray, from below, inside or above it; long grazing paths are capped.
+// The first stretch of a spherical shell along a ray, from below, inside or above it. Even a ray grazing the limb from orbit is shorter than the cap.
 bool ShellSegment(VolumePrimitive v, vec3 origin, vec3 direction, out float enter, out float exit) {
 
-    const float MaxSpan = 80000.0;
+    const float MaxSpan = 900000.0;
 
     vec3 o = origin - v.params0.xyz;
     float r = length(o);
@@ -666,6 +666,30 @@ void MarchVolume(VolumePrimitive v, vec3 origin, vec3 direction, float enter, fl
 
     }
 
+    if (v.kind.x == VolumeCloudLayer || v.kind.x == VolumeCirrus) {
+
+        float crowding = (exit - enter) / (stepLength * float(steps));
+
+        if (crowding > 1.0) {
+
+            // More layer than steps: they lengthen with distance, as a pixel's footprint does, so the near cloud keeps its detail and the far cloud is still reached.
+            // The last step is this many times the first: the root of ratio - 1 = crowding * log(ratio).
+            float ratio = max(crowding, 1.02);
+
+            for (int i = 0; i < 5; i++) {
+
+                ratio = 1.0 + crowding * log(ratio);
+
+            }
+
+            ratio = max(ratio, 1.02);
+            growth = pow(ratio, 1.0 / float(steps));
+            stepSpan = (exit - enter) * (growth - 1.0) / (ratio - 1.0);
+
+        }
+
+    }
+
     float stepStart = enter;
     vec3 sunDirection = frame.sunDirection.xyz;
     float cosTheta = dot(direction, sunDirection);
@@ -681,7 +705,8 @@ void MarchVolume(VolumePrimitive v, vec3 origin, vec3 direction, float enter, fl
         stepStart += dt;
         stepSpan *= growth;
 
-        volumeFootprint = t * pixelAngle;
+        // Detail finer than the step is as unresolved as detail finer than the pixel.
+        volumeFootprint = max(t * pixelAngle, growth > 1.0 && v.kind.x != VolumePlume ? dt * 0.4 : 0.0);
         vec3 p = origin + direction * t;
         VolumeSample s = SampleVolume(v, p);
 

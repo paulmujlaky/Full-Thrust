@@ -35,7 +35,11 @@ void main() {
     vec3 u;
     vec3 v;
     vec3 center = CloudShadowCenter(u, v);
-    vec2 offset = ((vec2(texel) + 0.5) / vec2(size) - 0.5) * CloudShadowExtent;
+    vec2 s = (vec2(texel) + 0.5) / vec2(size) * 2.0 - 1.0;
+    vec2 offset = CloudShadowUnwarp(s) * (0.5 * CloudShadowExtent);
+
+    // Width of this texel on the ground: the warp makes it a tenth of the average under the camera.
+    float texelSize = CloudShadowExtent / float(size.x) * (CloudShadowWarp + 2.0 * (1.0 - CloudShadowWarp) * max(abs(s.x), abs(s.y)));
 
     vec3 sun = frame.sunDirection.xyz;
     vec3 line = center + u * offset.x + v * offset.y - layer.params0.xyz;
@@ -59,7 +63,7 @@ void main() {
     float depth = 0.0;
 
     // Wisps are finer than a texel's worth of shadow, so the footprint is set to drop them.
-    volumeFootprint = 2.0 * CloudShadowExtent / float(size.x);
+    volumeFootprint = 2.0 * texelSize;
 
     for (int i = 0; i < Steps; i++) {
 

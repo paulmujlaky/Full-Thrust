@@ -18,7 +18,8 @@ layout(set = 0, binding = 0) uniform Frame {
 
     vec4 exposure;
 
-    mat4 shadowViewProjection[4];
+    // The sun's cascades, the planet-scale horizon map, then six cube faces for each point light.
+    mat4 shadowViewProjection[29];
     vec4 shadowSplits;
     vec4 shadowTexel;
 
@@ -62,6 +63,23 @@ layout(set = 0, binding = 0) uniform Frame {
     vec4 occluders[2];
     vec4 occluderGlow[2];
 
+    // Last frame's view-projection in last frame's render-local space, and this frame's, both without the sub-pixel jitter.
+    mat4 previousViewProjection;
+    mat4 unjitteredViewProjection;
+
+    // xy: this frame's jitter in NDC; zw: last frame's.
+    vec4 jitter;
+
+    // Per terrain body: where a point of the rotating ground was last frame, as a small rotation about its centre plus a shift.
+    mat4 terrainMotion[4];
+    vec4 terrainCenter[4];
+
+    // x world size of a horizon-map texel, y 1 when the map is valid, z one over its resolution.
+    vec4 horizonShadow;
+
+    // x 1 when the point lights have shadow maps, y their near plane, z one over their resolution.
+    vec4 lightShadow;
+
 } frame;
 
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow shadowMap;
@@ -76,6 +94,8 @@ layout(set = 0, binding = 11) uniform sampler2D weatherMap;
 layout(set = 0, binding = 9) uniform sampler2D skyShafts;
 layout(set = 0, binding = 10) uniform sampler2D cloudShadowMap;
 layout(set = 0, binding = 12) uniform sampler3D aerialTransmittance;
+layout(set = 0, binding = 13) uniform sampler2DShadow horizonShadowMap;
+layout(set = 0, binding = 14) uniform sampler2DArrayShadow lightShadowMap;
 
 const float PI = 3.14159265359;
 
@@ -86,9 +106,25 @@ const float PI = 3.14159265359;
 // World-space view ray through an NDC position, built in view space so it stays exact far from the floating origin.
 vec3 ViewDirection(vec2 ndc) {
 
-    vec3 view = vec3(ndc.x / frame.projection[0][0], ndc.y / frame.projection[1][1], -1.0);
+    vec3 view = vec3((ndc.x - frame.jitter.x) / frame.projection[0][0], (ndc.y - frame.jitter.y) / frame.projection[1][1], -1.0);
 
     return normalize(transpose(mat3(frame.view)) * view);
+
+}
+
+// Where a ground point of a terrain body was last frame, in last frame's render-local space.
+vec3 PreviousTerrainPosition(int body, vec3 world) {
+
+    mat4 motion = frame.terrainMotion[body];
+
+    return world + mat3(motion) * (world - frame.terrainCenter[body].xyz) + motion[3].xyz;
+
+}
+
+// Screen-space motion in UV units from clip positions without jitter: this frame's and last frame's.
+vec2 ScreenVelocity(vec4 current, vec4 previous) {
+
+    return (current.xy / current.w - previous.xy / previous.w) * 0.5;
 
 }
 
@@ -236,6 +272,9 @@ struct Surface {
     vec3 geometricNormal;
     float relief;
 
+    // 1 for the porous dust of an airless body, which follows a lunar law rather than Lambert's.
+    float regolith;
+
 };
 
 float BeamWeight(int index, vec3 towardLight) {
@@ -255,6 +294,59 @@ float BeamWeight(int index, vec3 towardLight) {
 }
 
 float CloudShadow(vec3 worldPosition);
+
+// Visibility of a point light from a surface, through the cube of depth maps around it. Mirrors the face tables in LightShadowMaps.cs.
+float LightShadow(int index, vec3 p, vec3 normal) {
+
+    if (frame.lightShadow.x < 0.5) {
+
+        return 1.0;
+
+    }
+
+    const vec3 forwards[6] = vec3[](vec3(1.0, 0.0, 0.0), vec3(-1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, -1.0, 0.0), vec3(0.0, 0.0, 1.0), vec3(0.0, 0.0, -1.0));
+    const vec3 ups[6] = vec3[](vec3(0.0, 1.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0), vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 1.0, 0.0));
+
+    vec3 toSurface = p - frame.lightPositions[index].xyz;
+    float range = length(toSurface);
+
+    // A texel widens with distance; stepping off the surface by about one keeps it from shading itself.
+    toSurface += normal * (range * frame.lightShadow.z * 3.0 + 0.02);
+
+    vec3 a = abs(toSurface);
+    int face = a.x >= a.y && a.x >= a.z ? (toSurface.x > 0.0 ? 0 : 1) : a.y >= a.z ? (toSurface.y > 0.0 ? 2 : 3) : (toSurface.z > 0.0 ? 4 : 5);
+
+    vec3 forward = forwards[face];
+    vec3 up = ups[face];
+    vec3 right = cross(forward, up);
+
+    float depth = dot(toSurface, forward);
+
+    if (depth <= frame.lightShadow.y) {
+
+        return 1.0;
+
+    }
+
+    vec2 uv = vec2(dot(toSurface, right), -dot(toSurface, up)) / depth * 0.5 + 0.5;
+    float reference = frame.lightShadow.y / (depth * 0.985);
+    float layer = float(index * 6 + face);
+    float texel = frame.lightShadow.z;
+    float sum = 0.0;
+
+    for (int y = 0; y < 2; y++) {
+
+        for (int x = 0; x < 2; x++) {
+
+            sum += texture(lightShadowMap, vec4(uv + (vec2(x, y) - 0.5) * texel * 1.5, layer, reference));
+
+        }
+
+    }
+
+    return sum * 0.25;
+
+}
 
 vec3 ShadeSurface(Surface s, vec3 p, vec3 n, vec3 v, float shadow) {
 
@@ -278,6 +370,19 @@ vec3 ShadeSurface(Surface s, vec3 p, vec3 n, vec3 v, float shadow) {
     float diffuseResponse = (1.0 + grazing * pow(1.0 - nl, 5.0)) * (1.0 + grazing * pow(1.0 - nv, 5.0));
     vec3 sun = SunIlluminanceAt(p);
     vec3 direct = (diffuse * diffuseResponse + specular) * sun * nl * shadow;
+
+    if (s.regolith > 0.0) {
+
+        // Lommel-Seeliger with a little Lambert (the lunar-Lambert law): no limb darkening at full phase, a hard terminator at the quarters.
+        float lunar = mix(nl, 2.0 * nl / max(nl + nv, 1e-4), 0.7);
+
+        // Opposition surge: looking down the sunlight, every grain hides its own shadow.
+        float phase = acos(clamp(dot(l, v), -1.0, 1.0));
+        float surge = 1.0 + 0.55 / (1.0 + tan(phase * 0.5) / 0.07);
+
+        direct = s.albedo / PI * sun * lunar * surge * shadow;
+
+    }
 
     // Specular ambient reflects the sky and the ground, blurring towards irradiance as roughness rises.
     vec3 ambientF = FresnelSchlickRoughness(nv, f0, roughness);
@@ -322,7 +427,15 @@ vec3 ShadeSurface(Surface s, vec3 p, vec3 n, vec3 v, float shadow) {
         float skim = dot(s.geometricNormal, pl);
         float exposed = s.relief > 0.0 ? smoothstep(0.0, s.relief, skim) : step(0.0, skim);
 
-        direct += (pointDiffuse + pointSpecular) * frame.lightIntensities[i].rgb / distanceSquared * pnl * exposed * BeamWeight(i, pl);
+        float reach = pnl * exposed * BeamWeight(i, pl);
+
+        if (reach > 0.0) {
+
+            reach *= LightShadow(i, p, s.geometricNormal);
+
+        }
+
+        direct += (pointDiffuse + pointSpecular) * frame.lightIntensities[i].rgb / distanceSquared * reach;
 
     }
 
@@ -386,6 +499,46 @@ float SampleCascade(int cascade, vec3 worldPosition, vec3 normal) {
 
 }
 
+// Terrain shadows past the cascades, from one map fitted to the visible face of the nearest body.
+float HorizonShadow(vec3 worldPosition, vec3 normal) {
+
+    if (frame.horizonShadow.y < 0.5) {
+
+        return 1.0;
+
+    }
+
+    // Texels here span metres to kilometres; a full texel of offset would lift valley floors over the ridges that shade them.
+    vec3 offset = normal * frame.horizonShadow.x * 0.6;
+    vec4 clip = frame.shadowViewProjection[4] * vec4(worldPosition + offset, 1.0);
+    vec2 uv = clip.xy * 0.5 + 0.5;
+
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))) || clip.z > 1.0 || clip.z < 0.0) {
+
+        return 1.0;
+
+    }
+
+    float texel = frame.horizonShadow.z;
+    float sum = 0.0;
+
+    for (int y = 0; y < 3; y++) {
+
+        for (int x = 0; x < 3; x++) {
+
+            sum += texture(horizonShadowMap, vec3(uv + (vec2(x, y) - 1.0) * texel * 1.33, clip.z));
+
+        }
+
+    }
+
+    // Fades out at the map's rim rather than ending on a line.
+    float edge = max(abs(uv.x - 0.5), abs(uv.y - 0.5)) * 2.0;
+
+    return mix(sum / 9.0, 1.0, smoothstep(0.92, 1.0, edge));
+
+}
+
 // Sun visibility from the cascades; the last tenth of each cascade blends into the next so seams do not show.
 float CascadeShadow(vec3 worldPosition, vec3 normal) {
 
@@ -402,7 +555,7 @@ float CascadeShadow(vec3 worldPosition, vec3 normal) {
 
     if (cascade >= count) {
 
-        return 1.0;
+        return HorizonShadow(worldPosition, normal);
 
     }
 
@@ -414,7 +567,7 @@ float CascadeShadow(vec3 worldPosition, vec3 normal) {
 
     if (blend > 0.0) {
 
-        float next = cascade + 1 < count ? SampleCascade(cascade + 1, worldPosition, normal) : 1.0;
+        float next = cascade + 1 < count ? SampleCascade(cascade + 1, worldPosition, normal) : HorizonShadow(worldPosition, normal);
 
         shadow = mix(shadow, next, blend);
 
@@ -517,13 +670,27 @@ vec3 CloudShadowCenter(out vec3 u, out vec3 v) {
 
 }
 
+// Share of the cloud shadow map's warp that is linear; the rest is quadratic, so texels near the camera are this fraction of a uniform map's.
+const float CloudShadowWarp = 0.1;
+
+// Metres from the map's centre, as a fraction of its half-width, for a texture coordinate in [-1, 1]: fine texels under the camera, coarse ones far out.
+vec2 CloudShadowUnwarp(vec2 s) {
+
+    return s * (CloudShadowWarp + (1.0 - CloudShadowWarp) * abs(s));
+
+}
+
 vec2 CloudShadowUv(vec3 worldPosition) {
 
     vec3 u;
     vec3 v;
     vec3 offset = worldPosition - CloudShadowCenter(u, v);
+    vec2 reach = vec2(dot(offset, u), dot(offset, v)) / (0.5 * CloudShadowExtent);
 
-    return vec2(dot(offset, u), dot(offset, v)) / CloudShadowExtent + 0.5;
+    // Inverse of CloudShadowUnwarp.
+    vec2 s = (sqrt(CloudShadowWarp * CloudShadowWarp + 4.0 * (1.0 - CloudShadowWarp) * abs(reach)) - CloudShadowWarp) / (2.0 * (1.0 - CloudShadowWarp));
+
+    return sign(reach) * s * 0.5 + 0.5;
 
 }
 

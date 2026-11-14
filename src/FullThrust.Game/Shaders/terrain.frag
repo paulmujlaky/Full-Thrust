@@ -482,6 +482,9 @@ void main() {
     // Grass, stones and soil hide the ground from a light skimming in below about ten degrees.
     s.relief = 0.18;
 
+    // Airless dust scatters light back the way it came, which flattens the disc and brightens it at full phase.
+    s.regolith = body.deepWater.w < -0.5 ? 1.0 : 0.0;
+
     if (detail > 0.0) {
 
         n = normalize(mat3(pc.model) * normalize(bodyNormal + normalOffset * detail));
@@ -530,6 +533,14 @@ void main() {
         OceanSurface water = Ocean(vDetail, transpose(toWorld) * up, time, metresPerPixel);
         // From afar the metre-wide surf band smears across whole triangles into a pale coastline.
         float foam = ShoreFoam(vDetail, depth, time) * (1.0 - smoothstep(1.0, 6.0, metresPerPixel));
+
+        // Whitecaps need open water under them; in the shallows the shore break takes over.
+        foam = max(foam, water.foam * smoothstep(1.0, 12.0, depth));
+
+        // Sunlight entering the back of a steep crest leaves its face as a green glow.
+        float through = pow(max(dot(v, -frame.sunDirection.xyz), 0.0), 3.0) * max(dot(up, frame.sunDirection.xyz), 0.0);
+
+        scattering *= 1.0 + (0.6 + 5.0 * through) * water.crest;
 
         s.albedo = mix(s.albedo * transmittance + scattering * (1.0 - transmittance), vec3(0.8), foam);
         s.metallic = 0.0;

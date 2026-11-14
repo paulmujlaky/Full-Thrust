@@ -80,6 +80,9 @@ public sealed class GameOptions {
     // Replaces the shaded scene with a debug view for captures: "ao" or "cascades".
     public string? DebugView;
 
+    // Turns temporal anti-aliasing off, for before-and-after captures.
+    public bool NoTaa;
+
     public double TimeScale = 1;
 
     // Universal time in seconds the game starts at.
@@ -151,6 +154,8 @@ public sealed class GameApp : IDisposable {
     private ReentrySource? _reentry;
     private ExposureController? _exposure;
     private BloomPass? _bloom;
+    private TemporalAntiAliasing? _antiAliasing;
+    private PostEffects? _postEffects;
 
     private readonly World _world = new();
     private readonly SystemScheduler _systems = new();
@@ -350,11 +355,11 @@ public sealed class GameApp : IDisposable {
 
         _modelLibrary = new ModelLibrary(_vulkan, _uploader, _models, Path.Combine(AppContext.BaseDirectory, _options.ModelsDirectory));
 
-        _terrain = new TerrainRenderer(_vulkan.Device, _uploader, _renderer.SceneRenderPass, _renderer.DepthRenderPass, _renderer.Frames.SetLayout, shaders, _bodies, _origin, _vulkan.SamplerAnisotropy, Path.Combine(AppContext.BaseDirectory, "data", "textures", "terrain"));
+        _terrain = new TerrainRenderer(_vulkan.Device, _uploader, _renderer.SceneRenderPass, _renderer.DepthRenderPass, _renderer.ShadowRenderPass, _renderer.Frames.SetLayout, shaders, _bodies, _origin, _vulkan.SamplerAnisotropy, Path.Combine(AppContext.BaseDirectory, "data", "textures", "terrain"));
 
         _terrain.ShowLevels = _options.ShowTerrainLevels;
         _renderer.AddPass(_terrain);
-        _meshPass = new MeshPass(_vulkan.Device, _renderer.SceneRenderPass, _renderer.DepthRenderPass, _renderer.Frames.SetLayout, shaders, _world, _origin, _modelLibrary, _camera.Camera);
+        _meshPass = new MeshPass(_vulkan.Device, _renderer.SceneRenderPass, _renderer.DepthRenderPass, _renderer.ShadowRenderPass, _renderer.Frames.SetLayout, shaders, _world, _origin, _modelLibrary, _camera.Camera);
 
         _renderer.AddPass(_meshPass);
         _background = new BackgroundPass(_vulkan.Device, _renderer.SceneRenderPass, _renderer.Frames.SetLayout, shaders);
@@ -396,8 +401,17 @@ public sealed class GameApp : IDisposable {
         _renderer.Prepass.AddCaster(_meshPass);
         _renderer.Shadows.AddCaster(_terrain);
         _renderer.Shadows.AddCaster(_meshPass);
+        _renderer.LightShadows.AddCaster(_meshPass);
         _renderer.AddPass(shapes);
         _renderer.AddPass(new DebugLinePass(_vulkan.Device, _renderer.SceneRenderPass, shaders, _lines));
+        // Post effects chain in this order, each reading the one before; exposure, bloom and tonemapping read the last.
+        _antiAliasing = new TemporalAntiAliasing(_vulkan.Device, shaders, _renderer.Hdr, _renderer.Frames) { Active = !_options.NoTaa };
+        _renderer.Jitter = _antiAliasing;
+        _renderer.AddPass(_antiAliasing);
+
+        _postEffects = new PostEffects(_vulkan.Device, shaders, _renderer.Hdr, _renderer.Frames);
+        _renderer.AddPass(_postEffects);
+
         _exposure = new ExposureController(_vulkan.Device, shaders, _renderer.Hdr, _lighting) { Automatic = double.IsNaN(_options.Ev100) };
         _bloom = new BloomPass(_vulkan.Device, shaders, _renderer.Hdr);
 
@@ -714,6 +728,20 @@ public sealed class GameApp : IDisposable {
         _atmosphere?.Update(_camera.Camera.Position, _clock.UniversalTime);
         _clouds?.Update(_camera.Camera.Position, _clock.UniversalTime);
         _trails?.Update(_clock.UniversalTime);
+
+        _postEffects!.SuspendBlur = _warp.Rate > 1;
+
+        if (_volumetrics is not null && _terrain is not null) {
+
+            _volumetrics.GroundBody = _terrain.SlotOf(_bodies.DominantBodyAt(_camera.Camera.Position, _clock.UniversalTime));
+
+            if (_world.IsAlive(_scene.Craft)) {
+
+                _volumetrics.CraftPosition = _origin.ToLocal(_world.Get<Transform>(_scene.Craft).Position);
+
+            }
+
+        }
         _renderer.Render(size, _camera.Camera.ViewMatrix(_origin), _camera.Camera.ProjectionMatrix(aspect));
         _debugUi.EndFrame();
 

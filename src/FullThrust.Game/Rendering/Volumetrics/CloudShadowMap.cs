@@ -8,7 +8,7 @@ namespace FullThrust.Game.Rendering.Volumetrics;
 public sealed class CloudShadowMap : IRenderPass {
 
     // Covers CloudShadowExtent in common.glsl, where surfaces, haze and the sky look it up.
-    private const int Size = 384;
+    private const int Size = 512;
     private const int GroupSize = 8;
 
     // CloudShadowFadeEnd in common.glsl: from higher up every visible surface takes the weather map instead.

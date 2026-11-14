@@ -9,9 +9,22 @@ public sealed class ShadowMaps : IRenderPass, IFrameUniformsWriter {
 
     public const int MaxCascades = 4;
 
+    // The horizon map follows the cascades in the shadow matrices.
+    public const int HorizonIndex = MaxCascades;
+
+    public const int HorizonResolution = 4096;
+
     public const VkFormat Format = VkFormat.D32SFloat;
 
     private readonly DeviceEx _device;
+
+    private readonly ImageEx _horizonImage;
+    private readonly ImageViewEx _horizonView;
+    private readonly VkFramebuffer _horizonFramebuffer;
+
+    private float4x4 _horizonViewProjection;
+    private float _horizonTexel;
+    private bool _horizonValid;
 
     private readonly ImageEx _image;
     private readonly ImageViewEx _arrayView;
@@ -77,6 +90,36 @@ public sealed class ShadowMaps : IRenderPass, IFrameUniformsWriter {
 
         }
 
+        _horizonImage = device.CreateImage(new ImageEx.CreateInfo {
+
+            Name = "HorizonShadowMap",
+            ImageType = VkImageType._2D,
+            ImageFormat = Format,
+            ImageExtent = new VkExtent3D { Width = HorizonResolution, Height = HorizonResolution, Depth = 1 },
+            ImageMipLevels = 1,
+            ImageArrayLayers = 1,
+            ImageSamples = VkSampleCountFlags._1Bit,
+            ImageTiling = VkImageTiling.Optimal,
+            ImageUsage = VkImageUsageFlags.DepthStencilAttachmentBit | VkImageUsageFlags.SampledBit,
+            AllocRequiredProperties = VkMemoryPropertyFlags.DeviceLocalBit,
+
+        });
+
+        _horizonView = _horizonImage.CreateImageView(VkImageViewType._2D, _horizonImage.GetFullRange(VkImageAspectFlags.DepthBit), null);
+
+        var horizonView = _horizonView.VkImageView;
+
+        _horizonFramebuffer = device.CreateFramebuffer(new VkFramebufferCreateInfo {
+
+            RenderPass = RenderPass,
+            AttachmentCount = 1,
+            Attachments = &horizonView,
+            Width = HorizonResolution,
+            Height = HorizonResolution,
+            Layers = 1,
+
+        }, null);
+
         // Reverse-Z: a receiver is lit when it is at least as near the sun as the stored caster. The black border reads as lit.
         Sampler = device.CreateSampler(new VkSamplerCreateInfo {
 
@@ -112,6 +155,14 @@ public sealed class ShadowMaps : IRenderPass, IFrameUniformsWriter {
 
     public VkSampler Sampler { get; }
 
+    public VkImageView HorizonView => _horizonView.VkImageView;
+
+    // Terrain shadows from the last cascade out to the horizon, and across the whole lit face from orbit.
+    public bool HorizonShadows { get; set; } = true;
+
+    // Smallest half-width the horizon map covers, which sets its finest texel.
+    public float HorizonMinimumRadius { get; set; } = 24000.0f;
+
     public int Cascades { get; set; } = MaxCascades;
 
     public float MaxDistance { get; set; } = 4000.0f;
@@ -135,7 +186,45 @@ public sealed class ShadowMaps : IRenderPass, IFrameUniformsWriter {
 
     public float Split(int cascade) => _splits[cascade];
 
-    public void Update(in float4x4 view, in float4x4 projection, float3 sunDirection) {
+    // Fits one map to the part of the nearest body the camera can see: its whole face from afar, the ground out to the horizon when low.
+    private void UpdateHorizon(float3 eye, float4 body, float3 lightX, float3 lightY, float3 lightZ) {
+
+        _horizonValid = HorizonShadows && CastShadows && body.W > 0;
+
+        if (!_horizonValid) {
+
+            return;
+
+        }
+
+        var toCamera = -new float3(body.X, body.Y, body.Z);
+        var distance = MathF.Max(toCamera.Length(), body.W + 1);
+        var up = toCamera / toCamera.Length();
+
+        // The visible cap ends where sight lines graze the sphere; its rim circle bounds it.
+        var cosine = body.W / distance;
+        var sine = MathF.Sqrt(MathF.Max(1 - cosine * cosine, 0));
+        var radius = MathF.Max(body.W * sine * 1.05f, HorizonMinimumRadius);
+
+        // Whole steps of radius keep the texel size, and so the shadow edges, still while the camera climbs.
+        radius = MathF.Pow(2, MathF.Ceiling(MathF.Log2(radius) * 8) / 8);
+
+        var center = eye + new float3(body.X, body.Y, body.Z) + up * (body.W * cosine);
+        var texel = 2 * radius / HorizonResolution;
+
+        var x = MathF.Floor(float3.Dot(center, lightX) / texel) * texel;
+        var y = MathF.Floor(float3.Dot(center, lightY) / texel) * texel;
+
+        center = lightX * x + lightY * y + lightZ * float3.Dot(center, lightZ);
+
+        var lightView = float4x4.CreateLookTo(center + lightZ * radius, -lightZ, lightY);
+
+        _horizonViewProjection = lightView * OrthographicReverseZ(radius, 2 * radius);
+        _horizonTexel = texel;
+
+    }
+
+    public void Update(in float4x4 view, in float4x4 projection, float3 sunDirection, float4 nearestBody) {
 
         float4x4.Invert(view, out var inverseView);
 
@@ -152,6 +241,8 @@ public sealed class ShadowMaps : IRenderPass, IFrameUniformsWriter {
         var up = MathF.Abs(lightZ.Y) < 0.99f ? float3.UnitY : float3.UnitX;
         var lightX = float3.Normalize(float3.Cross(up, lightZ));
         var lightY = float3.Cross(lightZ, lightX);
+
+        UpdateHorizon(eye, nearestBody, lightX, lightY, lightZ);
 
         var count = Math.Clamp(Cascades, 1, MaxCascades);
         var start = near;
@@ -218,6 +309,9 @@ public sealed class ShadowMaps : IRenderPass, IFrameUniformsWriter {
         uniforms.ShadowTexel = new float4(_texel[0], _texel[1], _texel[2], _texel[3]);
         uniforms.ShadowParams = new float4(CastShadows ? Math.Clamp(Cascades, 1, MaxCascades) : 0, NormalOffset, FilterRadius, ShowCascades ? 1 : 0);
 
+        uniforms.ShadowViewProjection[HorizonIndex] = _horizonViewProjection;
+        uniforms.HorizonShadow = new float4(_horizonTexel, _horizonValid ? 1 : 0, 1.0f / HorizonResolution, 0);
+
     }
 
     // Depth 1 at the sun-facing side of the box, 0 at the far side.
@@ -277,6 +371,40 @@ public sealed class ShadowMaps : IRenderPass, IFrameUniformsWriter {
 
         }
 
+        // Always cleared, so its layout stays valid for the shaders that sample it.
+        cmd.BeginRenderPass(new VkRenderPassBeginInfo {
+
+            RenderPass = RenderPass,
+            Framebuffer = _horizonFramebuffer,
+            RenderArea = new VkRect2D(new VkExtent2D { Width = HorizonResolution, Height = HorizonResolution }),
+            ClearValueCount = 1,
+            ClearValues = &clear,
+
+        }, VkSubpassContents.Inline);
+
+        if (_horizonValid) {
+
+            cmd.SetViewport(0, [new VkViewport { X = 0, Y = 0, Width = HorizonResolution, Height = HorizonResolution, MinDepth = 0, MaxDepth = 1 }]);
+            cmd.SetScissor(0, [new VkRect2D(new VkExtent2D { Width = HorizonResolution, Height = HorizonResolution })]);
+            cmd.SetDepthBias(-ConstantBias, 0.0f, -SlopeBias);
+
+            var context = new DepthContext(cmd, frame.FrameSet, DepthView.Horizon, HorizonIndex, Frustum.FromMatrix(_horizonViewProjection, includeNear: false));
+
+            foreach (var caster in _casters) {
+
+                if (caster.CastsDepth) {
+
+                    caster.RecordDepth(context);
+                    DrawCount++;
+
+                }
+
+            }
+
+        }
+
+        cmd.EndRenderPass();
+
     }
 
     public void Dispose() {
@@ -289,6 +417,10 @@ public sealed class ShadowMaps : IRenderPass, IFrameUniformsWriter {
             _layerViews[i].Dispose();
 
         }
+
+        _device.DestroyFramebuffer(_horizonFramebuffer, null);
+        _horizonView.Dispose();
+        _horizonImage.Dispose();
 
         _device.DestroyRenderPass(RenderPass, null);
         _arrayView.Dispose();

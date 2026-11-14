@@ -25,10 +25,13 @@ public struct TerrainPush {
     // x: the body's slot in TerrainMaterials.
     public int4 Body;
 
+    // x, y: camera distances between which the chunk's vertices slide onto the parent level's surface.
+    public float4 Morph;
+
 }
 
 // Quadtree LOD terrain: chunks built on worker threads live in fixed slots of one vertex buffer, recycled LRU first.
-public sealed class TerrainRenderer : IRenderPass, IFrameUploader, IDepthCaster {
+public sealed class TerrainRenderer : IRenderPass, IFrameUploader, IDepthCaster, IFrameUniformsWriter {
 
     public const double DetailPeriod = 65536;
 
@@ -75,7 +78,7 @@ public sealed class TerrainRenderer : IRenderPass, IFrameUploader, IDepthCaster 
 
     }
 
-    public TerrainRenderer(DeviceEx device, GpuUploader uploader, VkRenderPass renderPass, VkRenderPass depthPass, VkDescriptorSetLayout frameLayout, ShaderLibrary shaders, CelestialSystem system, FloatingOrigin origin, float anisotropy, string texturesRoot) {
+    public TerrainRenderer(DeviceEx device, GpuUploader uploader, VkRenderPass renderPass, VkRenderPass depthPass, VkRenderPass shadowPass, VkDescriptorSetLayout frameLayout, ShaderLibrary shaders, CelestialSystem system, FloatingOrigin origin, float anisotropy, string texturesRoot) {
 
         _device = device;
         _system = system;
@@ -157,10 +160,12 @@ public sealed class TerrainRenderer : IRenderPass, IFrameUploader, IDepthCaster 
             _pipeline = Pipelines.Create(device, shaders, desc);
 
             desc.RenderPass = depthPass;
-            desc.FragmentShader = null;
+            desc.FragmentShader = "velocity.frag";
 
             _depthPipeline = Pipelines.Create(device, shaders, desc);
 
+            desc.RenderPass = shadowPass;
+            desc.FragmentShader = null;
             desc.VertexShader = "terrain_shadow.vert";
             desc.ShadowCaster = true;
 
@@ -192,6 +197,23 @@ public sealed class TerrainRenderer : IRenderPass, IFrameUploader, IDepthCaster 
     public int JobsInFlight => _workers.InFlight;
 
     public IReadOnlyList<BodyTerrain> Bodies => _bodies;
+
+    // The body's index in the terrain uniforms, or -1 when it has no terrain.
+    public int SlotOf(CelestialBody body) {
+
+        foreach (var terrain in _bodies) {
+
+            if (terrain.Body == body) {
+
+                return terrain.Slot;
+
+            }
+
+        }
+
+        return -1;
+
+    }
 
     public float SplitDistance {
 
@@ -228,6 +250,50 @@ public sealed class TerrainRenderer : IRenderPass, IFrameUploader, IDepthCaster 
             var orbital = Math.Clamp((height - 0.02) / 0.28, 0, 1);
             var detail = double.Lerp(1, Math.Clamp(body.Data.OrbitalDetailScale, 1, 5), orbital);
             body.Quadtree.Update(local, body, detail);
+
+        }
+
+    }
+
+    // Publishes how each body's ground moved in render-local space since the last frame, for motion vectors.
+    public void Fill(ref FrameUniforms uniforms, bool enabled) {
+
+        var origin = _origin.Origin;
+
+        foreach (var body in _bodies) {
+
+            if (body.Slot >= TerrainMotions.MaxBodies) {
+
+                continue;
+
+            }
+
+            var rotation = body.Body.RotationAt(_time);
+            var center = _system.StateAt(body.Body.Index, _time).Position - origin;
+
+            if (!body.HasPrevious) {
+
+                body.PreviousRotation = rotation;
+                body.PreviousCenter = center;
+                body.HasPrevious = true;
+
+            }
+
+            // Doubles keep the difference of two nearly equal rotations and of two planet-sized offsets exact.
+            var turn = body.PreviousRotation * doubleQuat.Conjugate(rotation);
+
+            float4x4 motion;
+
+            motion.X = new float4(SpaceMath.ToFloat(turn * double3.UnitX - double3.UnitX), 0);
+            motion.Y = new float4(SpaceMath.ToFloat(turn * double3.UnitY - double3.UnitY), 0);
+            motion.Z = new float4(SpaceMath.ToFloat(turn * double3.UnitZ - double3.UnitZ), 0);
+            motion.W = new float4(SpaceMath.ToFloat(body.PreviousCenter - center), 1);
+
+            uniforms.TerrainMotion[body.Slot] = motion;
+            uniforms.TerrainCenter[body.Slot] = new float4(SpaceMath.ToFloat(center), 0);
+
+            body.PreviousRotation = rotation;
+            body.PreviousCenter = center;
 
         }
 
@@ -323,7 +389,13 @@ public sealed class TerrainRenderer : IRenderPass, IFrameUploader, IDepthCaster 
 
     public void RecordDepth(in DepthContext context) {
 
-        var pipeline = context.View == DepthView.Shadow ? _shadowPipeline : _depthPipeline;
+        if (context.View == DepthView.Light) {
+
+            return;
+
+        }
+
+        var pipeline = context.View == DepthView.Camera ? _depthPipeline : _shadowPipeline;
 
         DrawChunks(context.CommandBuffer, pipeline, context.FrameSet, context.Frustum, context.Cascade);
 
@@ -369,17 +441,24 @@ public sealed class TerrainRenderer : IRenderPass, IFrameUploader, IDepthCaster 
                 var c = chunk.Bounds.Center;
                 var detail = new double3(Wrap(c.X), Wrap(c.Y), Wrap(c.Z));
 
+                // A chunk borders finer ones no farther than the first distance and coarser ones no nearer than the second.
+                var edge = CubeSphere.EdgeLength(node, body.Body.Radius);
+                var threshold = body.Quadtree.SplitThreshold;
+                var morphEnd = 2 * threshold * edge;
+                var morphStart = Math.Min((threshold + 1.5) * edge, morphEnd * 0.95);
+
                 var push = new TerrainPush {
 
                     Model = matrix * float4x4.CreateTranslation(local),
                     Detail = new float4(SpaceMath.ToFloat(detail), ShowLevels ? node.Level + 1 : 0),
                     Center = new float4(SpaceMath.ToFloat(c), cascade),
                     Body = new int4(body.Slot, 0, 0, 0),
+                    Morph = new float4((float)morphStart, (float)morphEnd, 0, 0),
 
                 };
 
                 cmd.PushConstants(_layout, VkShaderStageFlags.VertexBit | VkShaderStageFlags.FragmentBit, ByteSize.Zero, push);
-                cmd.DrawIndexed(TerrainChunkBuilder.Indices.Length, 1, 0, slot * TerrainChunkBuilder.VertexCount, 0);
+                cmd.DrawIndexed(cascade >= 0 ? TerrainChunkBuilder.GridIndexCount : TerrainChunkBuilder.Indices.Length, 1, 0, slot * TerrainChunkBuilder.VertexCount, 0);
 
                 draws++;
 
@@ -447,6 +526,11 @@ public sealed class TerrainRenderer : IRenderPass, IFrameUploader, IDepthCaster 
         public TerrainPalette Palette { get; }
 
         public TerrainQuadtree Quadtree { get; }
+
+        // Last frame's rotation and centre in last frame's render-local space.
+        public doubleQuat PreviousRotation;
+        public double3 PreviousCenter;
+        public bool HasPrevious;
 
         public bool TryGetBounds(in TerrainNode node, out TerrainBounds bounds) {
 

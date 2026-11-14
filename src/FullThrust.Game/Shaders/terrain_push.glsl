@@ -10,4 +10,16 @@ layout(push_constant) uniform Push {
     // x: the body's slot in the terrain material uniforms.
     ivec4 body;
 
+    // Camera distances between which a vertex slides from its own level's surface onto its parent's.
+    vec4 morph;
+
 } pc;
+
+// 0 near the camera, 1 where the next coarser level takes over, so neighbouring levels always meet.
+float TerrainMorph(vec3 position) {
+
+    vec3 world = (pc.model * vec4(position, 1.0)).xyz;
+
+    return smoothstep(pc.morph.x, pc.morph.y, distance(world, frame.cameraPosition.xyz));
+
+}

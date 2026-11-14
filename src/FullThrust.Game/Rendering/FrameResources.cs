@@ -7,7 +7,7 @@ using Brutal.VulkanApi.Abstractions;
 
 namespace FullThrust.Game.Rendering;
 
-[InlineArray(ShadowMaps.MaxCascades)]
+[InlineArray(LightShadowMaps.FirstMatrix + LightShadowMaps.MapCount)]
 public struct CascadeMatrices {
 
     private float4x4 _element;
@@ -86,6 +86,38 @@ public struct FrameUniforms {
     public OccluderVectors Occluders;
     public OccluderVectors OccluderGlow;
 
+    // Last frame's view-projection in last frame's render-local space, and this frame's, both without the sub-pixel jitter.
+    public float4x4 PreviousViewProjection;
+    public float4x4 UnjitteredViewProjection;
+
+    // xy: this frame's jitter in NDC; zw: last frame's.
+    public float4 Jitter;
+
+    public TerrainMotions TerrainMotion;
+    public TerrainCenters TerrainCenter;
+
+    // x world size of a horizon-map texel, y 1 when the map is valid, z one over its resolution.
+    public float4 HorizonShadow;
+
+    // x 1 when the point lights have shadow maps, y their near plane, z one over their resolution.
+    public float4 LightShadow;
+
+}
+
+[InlineArray(MaxBodies)]
+public struct TerrainMotions {
+
+    public const int MaxBodies = 4;
+
+    private float4x4 _element;
+
+}
+
+[InlineArray(TerrainMotions.MaxBodies)]
+public struct TerrainCenters {
+
+    private float4 _element;
+
 }
 
 // Descriptor set 0, shared by every scene pipeline: frame uniforms plus the textures any shader may sample.
@@ -104,9 +136,11 @@ public static class GlobalBindings {
     public const int CloudShadowMap = 10;
     public const int WeatherMap = 11;
     public const int AerialTransmittance = 12;
+    public const int HorizonShadowMap = 13;
+    public const int LightShadowMap = 14;
 
     // Every binding after Frame is a combined image sampler; add new ones here and in common.glsl.
-    public const int Count = 13;
+    public const int Count = 15;
 
 }
 

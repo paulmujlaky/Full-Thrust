@@ -74,6 +74,7 @@ if (Value("--eclipse") is { } eclipse) {
 
 }
 options.DebugVolume = args.Contains("--debug-volume");
+options.NoTaa = args.Contains("--no-taa");
 options.CameraSite = Value("--camera-site");
 options.Rocket = Value("--rocket");
 

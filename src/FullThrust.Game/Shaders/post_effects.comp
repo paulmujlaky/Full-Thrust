@@ -1,0 +1,147 @@
+#version 450
+
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 1, binding = 0) uniform sampler2D sceneColor;
+layout(set = 1, binding = 1) uniform sampler2D sceneVelocity;
+layout(set = 1, binding = 2) uniform sampler2D sceneDepth;
+layout(set = 1, binding = 3, rgba16f) uniform writeonly image2D result;
+
+layout(push_constant) uniform Push {
+
+    // x: share of the frame the shutter is open, 0 for no motion blur; y: longest blur in pixels; z: heat haze strength in pixels, 0 for none; w: haze reach in source radii.
+    vec4 params;
+
+} pc;
+
+const int BlurTaps = 8;
+
+// Screen-space motion of a pixel in UV units; the sky has no velocity written, so it takes the camera's turning.
+vec2 Velocity(vec2 uv) {
+
+    if (textureLod(sceneDepth, uv, 0.0).r > 0.0) {
+
+        return textureLod(sceneVelocity, uv, 0.0).rg;
+
+    }
+
+    vec2 ndc = uv * 2.0 - 1.0;
+    vec4 before = frame.previousViewProjection * vec4(ViewDirection(ndc + frame.jitter.xy), 0.0);
+
+    return before.w > 0.0 ? (ndc - before.xy / before.w) * 0.5 : vec2(0.0);
+
+}
+
+// Hot exhaust bends the light passing through it: what lies behind a flame shimmers.
+vec2 HeatHaze(vec2 uv, float sceneDistance) {
+
+    vec2 shift = vec2(0.0);
+    float aspect = frame.viewport.x * frame.viewport.w;
+
+    for (int i = 0; i < int(frame.lightCount.x); i++) {
+
+        // Beamed lights are lamps; the others are flames and plasma.
+        if (frame.lightDirections[i].w > 0.0) {
+
+            continue;
+
+        }
+
+        vec4 clip = frame.unjitteredViewProjection * vec4(frame.lightPositions[i].xyz, 1.0);
+
+        if (clip.w <= 0.2) {
+
+            continue;
+
+        }
+
+        vec2 center = clip.xy / clip.w * 0.5 + 0.5;
+        float radius = frame.lightPositions[i].w * pc.params.w * abs(frame.projection[1][1]) * 0.5 / clip.w;
+        vec2 offset = (uv - center) * vec2(aspect, 1.0) / max(radius, 1e-5);
+        float reach = exp(-dot(offset, offset));
+
+        // Only light that crossed the hot gas is bent, and less of it once the flame is a few pixels wide.
+        float behind = smoothstep(clip.w * 0.95, clip.w * 1.3, sceneDistance);
+        float visible = smoothstep(2.0, 12.0, radius * frame.viewport.y);
+
+        if (reach * behind * visible < 0.01) {
+
+            continue;
+
+        }
+
+        // Cells a fraction of the flame's width, streaming away from it.
+        vec3 cell = vec3(offset * 2.3, frame.exposure.w * 2.7 + float(i) * 0.37);
+        vec2 bend = texture(cloudNoise, cell).gb + 0.5 * texture(cloudNoise, cell * 2.9 + 0.31).ba - 0.75;
+
+        shift += bend * (reach * behind * visible);
+
+    }
+
+    return shift * pc.params.z * frame.viewport.zw;
+
+}
+
+void main() {
+
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(result);
+
+    if (any(greaterThanEqual(pixel, size))) {
+
+        return;
+
+    }
+
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+    float depth = texelFetch(sceneDepth, pixel, 0).r;
+    float sceneDistance = depth > 0.0 ? frame.projection[3][2] / depth : 1e30;
+
+    if (pc.params.z > 0.0) {
+
+        uv += HeatHaze(uv, sceneDistance);
+
+    }
+
+    vec3 color = textureLod(sceneColor, uv, 0.0).rgb;
+
+    if (pc.params.x > 0.0) {
+
+        vec2 travel = Velocity(uv) * pc.params.x;
+        float pixels = length(travel * vec2(size));
+
+        if (pixels > 0.75) {
+
+            travel *= min(1.0, pc.params.y / pixels);
+
+            // Interleaved gradient noise offsets the taps, turning bands into grain that the eye averages.
+            float dither = fract(52.9829189 * fract(dot(vec2(pixel), vec2(0.06711056, 0.00583715))));
+            vec3 sum = color;
+            float weights = 1.0;
+
+            for (int i = 0; i < BlurTaps; i++) {
+
+                float t = (float(i) + dither) / float(BlurTaps) - 0.5;
+                vec2 tap = uv - travel * t;
+
+                // A still foreground must not smear into a moving background: taps that are much nearer and barely moving are left out.
+                float tapDepth = textureLod(sceneDepth, tap, 0.0).r;
+                float tapSpeed = length(Velocity(tap) * vec2(size)) * pc.params.x;
+                float weight = tapDepth > depth * 1.05 && tapSpeed < pixels * 0.3 ? 0.0 : 1.0;
+
+                sum += textureLod(sceneColor, tap, 0.0).rgb * weight;
+                weights += weight;
+
+            }
+
+            color = sum / weights;
+
+        }
+
+    }
+
+    imageStore(result, pixel, vec4(color, 1.0));
+
+}

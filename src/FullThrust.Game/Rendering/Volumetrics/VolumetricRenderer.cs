@@ -15,6 +15,12 @@ public struct ResolvePush {
     // xyz: floating origin now minus then; w: weight of the new frame.
     public float4 OriginShift;
 
+    // xyz: how far the craft moved in render-local space since last frame; w: terrain slot of the body the other volumes turn with, or -1.
+    public float4 Motion;
+
+    // Which pixel of each 2x2 block was marched: xy this frame, zw last frame.
+    public float4 Offsets;
+
 }
 
 // Ray-marches every volume source at half resolution after the opaque scene, accumulates it over frames, and Composite blends it in.
@@ -64,6 +70,10 @@ public sealed class VolumetricRenderer : IRenderPass, IResizeListener, IFrameUni
     private long _frameCount;
     private float4x4 _previousViewProjection;
     private double3 _previousOrigin;
+    private float3 _previousCraftPosition;
+
+    // Which pixel of each 2x2 block the last march sampled.
+    private float2 _offset;
 
     public VolumetricRenderer(DeviceEx device, ShaderLibrary shaders, HdrTarget target, FrameResources frames, FloatingOrigin origin, GpuUploader uploader) {
 
@@ -167,6 +177,12 @@ public sealed class VolumetricRenderer : IRenderPass, IResizeListener, IFrameUni
 
     // Emitters add lights while collecting; they reach shaders in the next frame's uniforms.
     public PointLights Lights { get; } = new();
+
+    // Render-local position of the craft whose exhaust and plasma are in view; their history follows it.
+    public float3 CraftPosition { get; set; }
+
+    // Terrain slot of the body whose ground and air carry the clouds and smoke, or -1 to treat them as fixed in space.
+    public int GroundBody { get; set; } = -1;
 
     // Register with the renderer after this pass.
     public IRenderPass CompositePass { get; }
@@ -287,12 +303,16 @@ public sealed class VolumetricRenderer : IRenderPass, IResizeListener, IFrameUni
         }
 
         // Golden-ratio steps of the march offset, so frames fill in between each other's samples.
-        var jitter = (float)(_frameCount++ * 0.6180339887 % 1.0);
+        var jitter = (float)(_frameCount * 0.6180339887 % 1.0);
+
+        // Each frame marches a different pixel of every 2x2 block, so over four frames every full-resolution pixel is seen.
+        var phase = (int)(_frameCount++ % 4);
+        var offset = new float2(phase is 1 or 2 ? 1 : 0, phase is 1 or 3 ? 1 : 0);
         var x = ComputeKernel.Groups(_color.Width, GroupSize);
         var y = ComputeKernel.Groups(_color.Height, GroupSize);
 
         Barriers.ShadersToCompute(cmd);
-        _march.Dispatch(cmd, frame.FrameSet, _sets[frame.FrameIndex], new float4(jitter, 0, 0, 0), x, y, 1);
+        _march.Dispatch(cmd, frame.FrameSet, _sets[frame.FrameIndex], new float4(jitter, offset.X, offset.Y, 0), x, y, 1);
         Barriers.ComputeToShaders(cmd);
 
         _written = 1 - _written;
@@ -301,8 +321,13 @@ public sealed class VolumetricRenderer : IRenderPass, IResizeListener, IFrameUni
 
             PreviousViewProjection = _previousViewProjection,
             OriginShift = new float4(SpaceMath.ToFloat(origin - _previousOrigin), _historyValid ? NewFrameWeight : 1.0f),
+            Motion = new float4(CraftPosition - _previousCraftPosition, GroundBody),
+            Offsets = new float4(offset.X, offset.Y, _offset.X, _offset.Y),
 
         };
+
+        _previousCraftPosition = CraftPosition;
+        _offset = offset;
 
         _resolve.Dispatch(cmd, frame.FrameSet, _resolveSets[_written], push, x, y, 1);
         Barriers.ComputeToShaders(cmd);
@@ -372,7 +397,11 @@ public sealed class VolumetricRenderer : IRenderPass, IResizeListener, IFrameUni
             _pool = Descriptors.CreatePool(device, 2, [new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 6 }]);
             _sets[0] = Descriptors.Allocate(device, _pool, _setLayout);
             _sets[1] = Descriptors.Allocate(device, _pool, _setLayout);
-            _layout = device.CreatePipelineLayout([frameLayout, _setLayout], [], null);
+            _layout = device.CreatePipelineLayout([frameLayout, _setLayout], [
+
+                new VkPushConstantRange { StageFlags = VkShaderStageFlags.FragmentBit, Offset = ByteSize.Zero, Size = ByteSize.Of<float4>() },
+
+            ], null);
 
             // Premultiplied: destination times the volume's transmittance, plus its light.
             var attachment = new VkPipelineColorBlendAttachmentState {
@@ -439,6 +468,7 @@ public sealed class VolumetricRenderer : IRenderPass, IResizeListener, IFrameUni
             cmd.BindPipeline(VkPipelineBindPoint.Graphics, _pipeline);
             cmd.BindDescriptorSet(VkPipelineBindPoint.Graphics, _layout, 0, frame.FrameSet, []);
             cmd.BindDescriptorSet(VkPipelineBindPoint.Graphics, _layout, 1, _sets[_owner._written], []);
+            cmd.PushConstants(_layout, VkShaderStageFlags.FragmentBit, ByteSize.Zero, new float4(_owner._offset, 0, 0));
             cmd.Draw(3, 1, 0, 0);
 
         }

@@ -18,6 +18,11 @@ public struct TerrainVertex {
     // Signed metres above sea level before clamping, so the shader can draw the shoreline between vertices.
     public float Height;
 
+    // What to add to reach the parent chunk's surface here: the vertex shader blends towards it with distance, so levels never pop or crack.
+    public float3 MorphPosition;
+    public float3 MorphNormal;
+    public float MorphHeight;
+
 }
 
 // One quadtree chunk: a grid plus skirts hiding cracks between levels. One builder per thread; Build does not allocate.
@@ -30,11 +35,22 @@ public sealed class TerrainChunkBuilder {
 
     private const int Border = Side + 2;
 
+    // The parent's vertices under this chunk: every second vertex, plus one ring for normals.
+    private const int ParentSide = Quads / 2 + 1;
+    private const int ParentBorder = ParentSide + 2;
+
     public static readonly ushort[] Indices = BuildIndices();
+
+    // The grid comes first in Indices; the skirts follow.
+    public const int GridIndexCount = Quads * Quads * 6;
 
     private readonly double3[] _positions = new double3[Border * Border];
     private readonly double3[] _directions = new double3[Border * Border];
     private readonly TerrainSample[] _samples = new TerrainSample[Border * Border];
+
+    private readonly double3[] _parentPositions = new double3[ParentBorder * ParentBorder];
+    private readonly double3[] _parentNormals = new double3[ParentSide * ParentSide];
+    private readonly double[] _parentHeights = new double[ParentBorder * ParentBorder];
 
     public TerrainBounds Build(ITerrain terrain, TerrainPalette palette, double radius, in TerrainNode node, Span<TerrainVertex> output) {
 
@@ -97,6 +113,12 @@ public sealed class TerrainChunkBuilder {
 
         }
 
+        if (node.Level > 0) {
+
+            Morph(terrain, radius, node, center, output);
+
+        }
+
         for (var k = 0; k < Side; k++) {
 
             Skirt(output, 0, k, EdgeIndex(0, k), center, skirt);
@@ -107,6 +129,78 @@ public sealed class TerrainChunkBuilder {
         }
 
         return new TerrainBounds(center, extent + skirt);
+
+    }
+
+    // Samples the parent's surface at its own resolution and stores, per vertex, the step onto it.
+    private void Morph(ITerrain terrain, double radius, in TerrainNode node, double3 center, Span<TerrainVertex> output) {
+
+        var step = node.Size / Quads;
+        var resolution = CubeSphere.EdgeLength(node, radius) / Quads * 2;
+        var ocean = terrain.HasOcean;
+
+        for (var py = 0; py < ParentBorder; py++) {
+
+            for (var px = 0; px < ParentBorder; px++) {
+
+                var direction = CubeSphere.Direction(node.Face, node.U0 + (px - 1) * 2 * step, node.V0 + (py - 1) * 2 * step);
+                var height = terrain.Sample(direction, resolution).Height;
+
+                _parentHeights[py * ParentBorder + px] = height;
+                _parentPositions[py * ParentBorder + px] = direction * (radius + (ocean ? Math.Max(height, 0) : height));
+
+            }
+
+        }
+
+        for (var py = 0; py < ParentSide; py++) {
+
+            for (var px = 0; px < ParentSide; px++) {
+
+                var i = (py + 1) * ParentBorder + px + 1;
+                var normal = double3.Normalize(double3.Cross(_parentPositions[i + 1] - _parentPositions[i - 1], _parentPositions[i + ParentBorder] - _parentPositions[i - ParentBorder]));
+
+                _parentNormals[py * ParentSide + px] = double3.Dot(normal, _parentPositions[i]) < 0 ? -normal : normal;
+
+            }
+
+        }
+
+        for (var y = 0; y < Side; y++) {
+
+            for (var x = 0; x < Side; x++) {
+
+                // Between the parent's vertices its surface is the edge or diagonal of its triangles, which is where these two lie.
+                var ax = x & ~1;
+                var ay = y & ~1;
+                var bx = x + (x & 1);
+                var by = y + (y & 1);
+
+                if ((x & 1) != 0 && (y & 1) != 0) {
+
+                    ax = x + 1;
+                    ay = y - 1;
+                    bx = x - 1;
+                    by = y + 1;
+
+                }
+
+                var a = (ay / 2 + 1) * ParentBorder + ax / 2 + 1;
+                var b = (by / 2 + 1) * ParentBorder + bx / 2 + 1;
+
+                var position = (_parentPositions[a] + _parentPositions[b]) * 0.5;
+                var normal = double3.Normalize(_parentNormals[ay / 2 * ParentSide + ax / 2] + _parentNormals[by / 2 * ParentSide + bx / 2]);
+                var height = (_parentHeights[a] + _parentHeights[b]) * 0.5;
+
+                ref var vertex = ref output[y * Side + x];
+
+                vertex.MorphPosition = ToFloat(position - center) - vertex.Position;
+                vertex.MorphNormal = ToFloat(normal) - vertex.Normal;
+                vertex.MorphHeight = (float)height - vertex.Height;
+
+            }
+
+        }
 
     }
 

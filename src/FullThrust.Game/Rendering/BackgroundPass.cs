@@ -52,9 +52,9 @@ public sealed class BackgroundPass : IRenderPass {
     public bool Enabled { get; set; } = true;
 
     // 1 is physical: stars are then invisible at daylight exposures, as in real photographs.
-    public float StarBrightness { get; set; } = 1.0f;
+    public float StarBrightness { get; set; } = 8.0f;
 
-    public float MilkyWayBrightness { get; set; } = 1.0f;
+    public float MilkyWayBrightness { get; set; } = 6.0f;
 
     public float FaintestMagnitude { get; set; } = 10.0f;
 

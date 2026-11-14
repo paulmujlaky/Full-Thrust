@@ -10,7 +10,7 @@ layout(set = 1, binding = 4, rgba16f) uniform writeonly image2D volumeColor;
 layout(set = 1, binding = 5, r32f) uniform writeonly image2D volumeDepth;
 layout(set = 1, binding = 6, r32f) uniform writeonly image2D volumeDistance;
 
-// x: this frame's jitter offset, so successive frames sample between each other's steps.
+// x: this frame's jitter offset, so successive frames sample between each other's steps; yz: which pixel of each 2x2 block is marched this frame.
 layout(push_constant) uniform Push {
 
     vec4 params;
@@ -19,7 +19,7 @@ layout(push_constant) uniform Push {
 
 const int MaxSegments = 8;
 
-// Half resolution: each invocation marches the view ray of the top-left pixel of its 2x2 block, in front-to-back order of primitives.
+// Half resolution: each invocation marches the view ray of one pixel of its 2x2 block, a different one each frame, in front-to-back order of primitives.
 void main() {
 
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -30,7 +30,7 @@ void main() {
 
     }
 
-    ivec2 full = min(pixel * 2, ivec2(frame.viewport.xy) - 1);
+    ivec2 full = min(pixel * 2 + ivec2(pc.params.yz), ivec2(frame.viewport.xy) - 1);
     float depth = texelFetch(sceneDepth, full, 0).r;
 
     imageStore(volumeDepth, pixel, vec4(depth));
@@ -47,7 +47,7 @@ void main() {
     }
 
     vec2 ndc = (vec2(full) + 0.5) * frame.viewport.zw * 2.0 - 1.0;
-    vec3 view = vec3(ndc.x / frame.projection[0][0], ndc.y / frame.projection[1][1], -1.0);
+    vec3 view = vec3((ndc.x - frame.jitter.x) / frame.projection[0][0], (ndc.y - frame.jitter.y) / frame.projection[1][1], -1.0);
     vec3 direction = normalize(transpose(mat3(frame.view)) * view);
     vec3 origin = frame.cameraPosition.xyz;
 
@@ -103,6 +103,9 @@ void main() {
 
     float jitter = fract(52.9829189 * fract(dot(vec2(pixel), vec2(0.06711056, 0.00583715))) + pc.params.x);
 
+    // What the pixel mostly shows moves with the craft (exhaust, plasma) or with the ground and air (clouds, smoke).
+    float craftWeight = 0.0;
+
     for (int s = 0; s < segments && transmission > 0.005; s++) {
 
         VolumeResult layer = VolumeResult(vec3(0.0), 1.0, 0.0, 0.0);
@@ -110,6 +113,14 @@ void main() {
         if (layer.depthWeight <= 1e-6) {
 
             continue;
+
+        }
+
+        int kind = volumes.items[order[s]].kind.x;
+
+        if (kind == VolumePlume || kind == VolumeShock) {
+
+            craftWeight += transmission * layer.depthWeight;
 
         }
 
@@ -128,6 +139,8 @@ void main() {
 
     // Parallax follows reciprocal distance when a pixel contains several transparent layers.
     float distance = depthWeight > 1e-6 ? depthWeight / inverseDepth : min(sceneDistance, 1e30);
-    imageStore(volumeDistance, pixel, vec4(distance));
+
+    // The sign tells the resolve which motion to reproject with: negative follows the craft.
+    imageStore(volumeDistance, pixel, vec4(craftWeight > 0.5 * depthWeight ? -distance : distance));
 
 }

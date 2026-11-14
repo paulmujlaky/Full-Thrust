@@ -34,6 +34,9 @@ public unsafe struct PipelineDesc {
     // Shadow casters: depth bias is set per pass, and geometry outside the depth range is clamped rather than clipped.
     public bool ShadowCaster;
 
+    // Point-light shadow casters clip at the near plane, so the light's own fixture does not shade it.
+    public bool ClipNear;
+
 }
 
 public static class Pipelines {
@@ -66,7 +69,7 @@ public static class Pipelines {
                 CullMode = desc.Cull,
                 FrontFace = VkFrontFace.CounterClockwise,
                 LineWidth = 1,
-                DepthClampEnable = desc.ShadowCaster,
+                DepthClampEnable = desc.ShadowCaster && !desc.ClipNear,
                 DepthBiasEnable = desc.ShadowCaster,
 
             };
