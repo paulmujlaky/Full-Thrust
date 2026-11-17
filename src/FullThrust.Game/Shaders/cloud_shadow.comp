@@ -7,9 +7,17 @@ layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(set = 1, binding = 7, r16f) uniform writeonly image2D cloudShadowTarget;
 
+// The first eight fields of VolumePrimitive; push constants stop at 128 bytes.
 layout(push_constant) uniform Push {
 
-    VolumePrimitive layer;
+    ivec4 kind;
+    vec4 position;
+    vec4 axis;
+    vec4 medium;
+    vec4 emission;
+    vec4 params0;
+    vec4 params1;
+    vec4 params2;
 
 } pc;
 
@@ -30,7 +38,7 @@ void main() {
 
     }
 
-    VolumePrimitive layer = pc.layer;
+    VolumePrimitive layer = VolumePrimitive(pc.kind, pc.position, pc.axis, pc.medium, pc.emission, pc.params0, pc.params1, pc.params2, vec4(0.0), ivec4(0));
 
     vec3 u;
     vec3 v;

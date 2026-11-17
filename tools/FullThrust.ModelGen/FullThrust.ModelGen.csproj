@@ -9,4 +9,8 @@
     <ProjectReference Include="..\..\src\FullThrust.Core\FullThrust.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Ahwoo.Brutal.Stb" />
+  </ItemGroup>
+
 </Project>

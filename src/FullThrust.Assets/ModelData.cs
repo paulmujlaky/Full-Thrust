@@ -75,6 +75,8 @@ public sealed class TextureData {
     // Encoded source kept for re-export without a lossy round trip.
     public byte[]? Png;
 
+    public byte[]? Jpeg;
+
 }
 
 // A run of triangles in the model's shared index buffer drawn with one material.

@@ -571,7 +571,7 @@ public static class Generators {
 
     }
 
-    private static floatQuat FromTo(float3 from, float3 to) {
+    public static floatQuat FromTo(float3 from, float3 to) {
 
         var dot = float3.Dot(from, to);
 
@@ -808,93 +808,22 @@ public static class Generators {
 
     }
 
-    // Keeps the triangles whose centroids fall inside a Y range of the source (after node transforms).
+    // A third-party source cropped, decimated and fitted, optionally with a heat shield closing its base.
     private static ModelData Crop(Recipe recipe, string modelsRoot) {
 
-        var source = GltfModelLoader.Load(Path.Combine(modelsRoot, recipe.Source!));
+        var model = SourceModel.Import(recipe, modelsRoot);
 
-        var vertices = new List<MeshVertex>();
-        var indices = new List<uint>();
-        var primitives = new List<PrimitiveData>();
-        var meshes = new List<MeshRange>();
-        var instances = new List<MeshInstance>();
+        if (recipe.Repaint) {
 
-        foreach (var instance in source.Instances) {
-
-            var range = source.Meshes[instance.Mesh];
-            var remap = new Dictionary<uint, uint>();
-            var first = primitives.Count;
-
-            for (var p = range.FirstPrimitive; p < range.FirstPrimitive + range.PrimitiveCount; p++) {
-
-                var primitive = source.Primitives[p];
-                var start = indices.Count;
-
-                for (var i = primitive.FirstIndex; i + 2 < primitive.FirstIndex + primitive.IndexCount; i += 3) {
-
-                    var centroid = 0f;
-
-                    for (var k = 0; k < 3; k++) {
-
-                        centroid += float3.Transform(source.Vertices[source.Indices[i + k]].Position, instance.Transform).Y / 3;
-
-                    }
-
-                    if (centroid < recipe.CropMinY || centroid > recipe.CropMaxY) {
-
-                        continue;
-
-                    }
-
-                    for (var k = 0; k < 3; k++) {
-
-                        var index = source.Indices[i + k];
-
-                        if (!remap.TryGetValue(index, out var mapped)) {
-
-                            mapped = (uint)vertices.Count;
-                            remap[index] = mapped;
-                            vertices.Add(source.Vertices[index]);
-
-                        }
-
-                        indices.Add(mapped);
-
-                    }
-
-                }
-
-                if (indices.Count > start) {
-
-                    primitives.Add(new PrimitiveData(start, indices.Count - start, primitive.Material));
-
-                }
-
-            }
-
-            if (primitives.Count > first) {
-
-                meshes.Add(new MeshRange(first, primitives.Count - first, range.Name));
-                instances.Add(new MeshInstance(meshes.Count - 1, instance.Transform));
-
-            }
+            model = Repaint(model, recipe);
 
         }
 
-        var model = new ModelData {
+        if (recipe.CapEnds) {
 
-            Name = recipe.Output,
-            Vertices = vertices.ToArray(),
-            Indices = indices.ToArray(),
-            Primitives = primitives.ToArray(),
-            Meshes = meshes.ToArray(),
-            Instances = instances.ToArray(),
-            Materials = source.Materials,
-            Textures = source.Textures,
+            model = CapEnds(model, recipe);
 
-        };
-
-        model.ComputeBounds();
+        }
 
         if (!recipe.CloseHeatShield) {
 
@@ -920,6 +849,123 @@ public static class Generators {
         mesh.Append(model, float4x4.Identity);
 
         return mesh.Build(recipe.Output);
+
+    }
+
+    // Untextured or named source surfaces take the tank skin, mapped round the part axis, with bands measured from the base.
+    private static ModelData Repaint(ModelData model, Recipe recipe) {
+
+        var mesh = new MeshBuilder();
+        var radius = (float)recipe.Diameter / 2;
+        var circumference = MathF.Tau * radius;
+        var paint = mesh.AddMaterial(Skin(mesh, "paint", recipe, circumference, circumference, recipe.PaintColor, recipe.AccentColor));
+        var accent = mesh.AddMaterial(Skin(mesh, "accent", new Recipe { Pattern = "solid", Seed = recipe.Seed + 3, PaintRoughness = 0.5 }, circumference, circumference, recipe.AccentColor, recipe.AccentColor));
+        var metal = mesh.AddMaterial(Material("metal", new float3(0.75f, 0.76f, 0.78f), 1, 0.32f));
+        var bottom = model.BoundsMin.Y;
+        var bands = WallSegments(recipe, model.BoundsMax.Y - bottom, paint, accent, metal).ToArray();
+        var kept = new List<PrimitiveData>();
+        var shared = new Dictionary<(uint, bool), uint>();
+
+        // Vertices are shared between triangles except where the seam wraps u past 1.
+        uint Shared(uint index, float u) {
+
+            if (shared.TryGetValue((index, u >= 1), out var mapped)) {
+
+                return mapped;
+
+            }
+
+            var vertex = model.Vertices[index];
+
+            vertex.Uv = new float2(u, -(vertex.Position.Y - bottom) / circumference);
+            mapped = mesh.Vertex(vertex);
+            shared[(index, u >= 1)] = mapped;
+
+            return mapped;
+
+        }
+
+
+        foreach (var range in model.Meshes) {
+
+            for (var p = range.FirstPrimitive; p < range.FirstPrimitive + range.PrimitiveCount; p++) {
+
+                var primitive = model.Primitives[p];
+                var material = model.Materials[primitive.Material];
+
+                var named = recipe.RepaintMaterials.Exists(name => material.Name.Contains(name, StringComparison.OrdinalIgnoreCase));
+
+                if (recipe.RepaintMaterials.Count > 0 ? !named : material.BaseColorTexture >= 0) {
+
+                    kept.Add(primitive);
+
+                    continue;
+
+                }
+
+                for (var i = primitive.FirstIndex; i + 2 < primitive.FirstIndex + primitive.IndexCount; i += 3) {
+
+                    var a = model.Vertices[model.Indices[i]].Position;
+                    var b = model.Vertices[model.Indices[i + 1]].Position;
+                    var c = model.Vertices[model.Indices[i + 2]].Position;
+                    var height = (a.Y + b.Y + c.Y) / 3 - bottom;
+                    var band = Array.Find(bands, s => height >= s.From && height <= s.To);
+                    var ua = Around(a);
+                    var ub = Around(b);
+                    var uc = Around(c);
+
+                    // A triangle straddling the seam would otherwise smear the whole texture across itself.
+                    if (MathF.Max(ua, MathF.Max(ub, uc)) - MathF.Min(ua, MathF.Min(ub, uc)) > 0.5f) {
+
+                        ua += ua < 0.5f ? 1 : 0;
+                        ub += ub < 0.5f ? 1 : 0;
+                        uc += uc < 0.5f ? 1 : 0;
+
+                    }
+
+                    mesh.Triangle(Shared(model.Indices[i], ua), Shared(model.Indices[i + 1], ub), Shared(model.Indices[i + 2], uc), band.To > band.From ? band.Material : paint);
+
+                }
+
+            }
+
+        }
+
+        if (kept.Count > 0) {
+
+            var rest = new ModelData { Vertices = model.Vertices, Indices = model.Indices, Primitives = kept.ToArray(), Meshes = [new MeshRange(0, kept.Count, "source")], Instances = [new MeshInstance(0, float4x4.Identity)], Materials = model.Materials, Textures = model.Textures };
+
+            mesh.Append(rest, float4x4.Identity);
+
+        }
+
+        return mesh.Build(recipe.Output);
+
+    }
+
+    // Bulkheads across open tube ends, inset so they never poke through the source's own rims.
+    private static ModelData CapEnds(ModelData model, Recipe recipe) {
+
+        var mesh = new MeshBuilder();
+        var dark = mesh.AddMaterial(Material("bulkhead", new float3(0.12f), 0.6f, 0.55f));
+        var radius = (float)recipe.Diameter / 2 * 0.97f;
+        var options = LatheOptions.Default with { Segments = 96, SmoothAngleDeg = 1 };
+        var bottom = model.BoundsMin.Y + 0.02f;
+        var top = model.BoundsMax.Y - 0.02f;
+
+        mesh.Lathe([new(0, bottom), new(radius, bottom)], dark, options);
+        mesh.Lathe([new(radius, top), new(0, top)], dark, options);
+        mesh.Append(model, float4x4.Identity);
+
+        return mesh.Build(recipe.Output);
+
+    }
+
+    private static float Around(float3 p) {
+
+        var angle = MathF.Atan2(-p.Z, p.X);
+
+        return (angle < 0 ? angle + MathF.Tau : angle) / MathF.Tau;
 
     }
 

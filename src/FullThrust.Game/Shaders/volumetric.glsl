@@ -18,6 +18,8 @@ struct VolumePrimitive {
     vec4 params0;
     vec4 params1;
     vec4 params2;
+    vec4 params3;
+    ivec4 hull;
 
 };
 
@@ -31,6 +33,82 @@ layout(std430, set = 1, binding = 3) readonly buffer Volumes {
     VolumePrimitive items[];
 
 } volumes;
+
+// Mirrors HullPrimitive in Rendering/Volumetrics/HullSet.cs: a capped cone from the aft centre and radius to the fore ones.
+struct HullPrimitive {
+
+    vec4 aft;
+    vec4 fore;
+
+};
+
+layout(std430, set = 1, binding = 8) readonly buffer Hulls {
+
+    ivec4 count;
+    HullPrimitive items[128];
+    int indices[512];
+
+} hulls;
+
+// Signed distance to a capped cone (Quilez).
+float HullConeDistance(vec3 p, HullPrimitive h) {
+
+    vec3 a = h.aft.xyz;
+    vec3 b = h.fore.xyz;
+    float ra = h.aft.w;
+    float rb = h.fore.w;
+
+    float rba = rb - ra;
+    float baba = dot(b - a, b - a);
+    float papa = dot(p - a, p - a);
+    float paba = dot(p - a, b - a) / baba;
+    float x = sqrt(max(papa - paba * paba * baba, 0.0));
+    float cax = max(0.0, x - (paba < 0.5 ? ra : rb));
+    float cay = abs(paba - 0.5) - 0.5;
+    float k = rba * rba + baba;
+    float f = clamp((rba * (x - ra) + paba * baba) / k, 0.0, 1.0);
+    float cbx = x - ra - f * rba;
+    float cby = paba - f;
+    float s = (cbx < 0.0 && cay < 0.0) ? -1.0 : 1.0;
+
+    return s * sqrt(min(cax * cax + cay * cay * baba, cbx * cbx + cby * cby * baba));
+
+}
+
+// Distance to the nearest hull a volume was given, and which one that is; 1e30 with none.
+float HullDistance(VolumePrimitive v, vec3 p, out int nearest) {
+
+    float best = 1e30;
+
+    nearest = -1;
+
+    for (int i = 0; i < v.hull.y; i++) {
+
+        int index = hulls.indices[v.hull.x + i];
+        float d = HullConeDistance(p, hulls.items[index]);
+
+        if (d < best) {
+
+            best = d;
+            nearest = index;
+
+        }
+
+    }
+
+    return best;
+
+}
+
+// Outward surface normal of one hull primitive, from a tetrahedron of distance taps.
+vec3 HullNormal(int index, vec3 p, float epsilon) {
+
+    HullPrimitive h = hulls.items[index];
+    const vec2 k = vec2(1.0, -1.0);
+
+    return normalize(k.xyy * HullConeDistance(p + k.xyy * epsilon, h) + k.yyx * HullConeDistance(p + k.yyx * epsilon, h) + k.yxy * HullConeDistance(p + k.yxy * epsilon, h) + k.xxx * HullConeDistance(p + k.xxx * epsilon, h));
+
+}
 
 struct VolumeSample {
 
@@ -177,6 +255,53 @@ bool PlumeSegment(VolumePrimitive v, vec3 origin, vec3 direction, out float ente
 
 }
 
+// The wall jet of a plume striking a surface: a slab over the surface, out to position.w from the strike point.
+bool WallSegment(VolumePrimitive v, vec3 origin, vec3 direction, out float enter, out float exit) {
+
+    vec3 normal = v.params3.xyz;
+    vec3 strike = v.params0.xyz + v.axis.xyz * v.params3.w;
+    float strikeRadius = v.params0.w + v.params3.w * (v.params1.x + 0.02);
+    float runout = v.position.w;
+    float thickness = (strikeRadius * 0.45 + runout * 0.1) * 1.6 + strikeRadius * 0.3;
+
+    float near;
+    float far;
+
+    enter = 0.0;
+    exit = 0.0;
+
+    if (!RaySphere(origin - strike, direction, runout, near, far) || far <= 0.0) {
+
+        return false;
+
+    }
+
+    float height = dot(origin - strike, normal);
+    float rate = dot(direction, normal);
+    float low = -1e30;
+    float high = 1e30;
+
+    if (abs(rate) > 1e-6) {
+
+        float a = (-thickness * 0.1 - height) / rate;
+        float b = (thickness - height) / rate;
+
+        low = min(a, b);
+        high = max(a, b);
+
+    } else if (height < -thickness * 0.1 || height > thickness) {
+
+        return false;
+
+    }
+
+    enter = max(max(near, low), 0.0);
+    exit = min(far, high);
+
+    return exit > enter;
+
+}
+
 bool VolumeSegment(VolumePrimitive v, vec3 origin, vec3 direction, out float enter, out float exit) {
 
     float near;
@@ -184,7 +309,28 @@ bool VolumeSegment(VolumePrimitive v, vec3 origin, vec3 direction, out float ent
 
     if (v.kind.x == VolumePlume) {
 
-        return PlumeSegment(v, origin, direction, enter, exit);
+        bool jet = PlumeSegment(v, origin, direction, enter, exit);
+
+        if (v.params3.w <= 0.0) {
+
+            return jet;
+
+        }
+
+        // A plume spreading over a surface also fills a thin slab around the strike point.
+        float wallEnter;
+        float wallExit;
+
+        if (WallSegment(v, origin, direction, wallEnter, wallExit)) {
+
+            enter = jet ? min(enter, wallEnter) : wallEnter;
+            exit = jet ? max(exit, wallExit) : wallExit;
+
+            return true;
+
+        }
+
+        return jet;
 
     }
 
@@ -252,6 +398,37 @@ VolumeSample Plume(VolumePrimitive v, vec3 p) {
     float exitRadius = v.params0.w;
     float x = dot(offset, v.axis.xyz);
     float span = v.axis.w;
+    float growth = v.params1.x + 0.02;
+
+    vec3 transverse = offset - v.axis.xyz * x;
+    float r = length(transverse);
+
+    // Where the jet strikes a surface it turns into a wall jet: distance along the surface continues the jet, height above it takes the place of radius.
+    float impact = v.params3.w;
+
+    if (impact > 0.0) {
+
+        vec3 normal = v.params3.xyz;
+        vec3 strike = p - (v.params0.xyz + v.axis.xyz * impact);
+        float height = dot(strike, normal);
+        float strikeRadius = exitRadius + impact * growth;
+
+        if (height < -0.1 * strikeRadius) {
+
+            return s;
+
+        }
+
+        float reach = length(strike - normal * height);
+        float wallX = impact + max(reach - strikeRadius * 0.3, 0.0);
+        float wallThickness = strikeRadius * 0.45 + reach * 0.1;
+        float wallR = max(height, 0.0) / wallThickness * (exitRadius + wallX * growth);
+        float turn = 1.0 - smoothstep(0.0, strikeRadius * 1.5, dot(strike, -v.axis.xyz));
+
+        x = mix(x, wallX, turn);
+        r = mix(r, wallR, turn);
+
+    }
 
     if (x < 0.0 || x > span) {
 
@@ -259,13 +436,27 @@ VolumeSample Plume(VolumePrimitive v, vec3 p) {
 
     }
 
-    vec3 transverse = offset - v.axis.xyz * x;
-    float r = length(transverse);
-    float radius = exitRadius + x * (v.params1.x + 0.02);
+    // Gas stops at hulls: the stage below, a neighbouring craft.
+    if (v.hull.y > 0) {
+
+        int nearest;
+
+        if (HullDistance(v, p, nearest) < 0.0) {
+
+            return s;
+
+        }
+
+    }
+
+    float radius = exitRadius + x * growth;
     float dilution = exitRadius * exitRadius / (radius * radius);
     float spacing = max(v.params1.y, 1e-3);
 
-    if (v.kind.w != 0 && x < exitRadius * 12.0) {
+    // In dense air neighbouring bells merge into one column within a few exit radii; in thin air they stay apart further.
+    float merged = exitRadius * mix(4.0, 12.0, v.params1.w);
+
+    if (v.kind.w != 0 && x < merged) {
 
         float ring = length(v.position.xyz);
         vec3 u = v.position.xyz / ring;
@@ -274,7 +465,7 @@ VolumeSample Plume(VolumePrimitive v, vec3 p) {
         float theta = atan(dot(transverse, w), dot(transverse, u));
         float angle = floor(theta / pitch + 0.5) * pitch;
         float bellDistance = length(transverse - ring * (u * cos(angle) + w * sin(angle)));
-        float separate = 1.0 - smoothstep(exitRadius, exitRadius * 12.0, x);
+        float separate = 1.0 - smoothstep(exitRadius * 0.5, merged, x);
         float bellRadius = exitRadius - ring;
         r = mix(r, v.kind.w > 0 ? min(r, bellDistance) : bellDistance, separate);
         radius = mix(radius, bellRadius + x * (v.params1.x + 0.055), separate);
@@ -421,7 +612,10 @@ VolumeSample CloudLayer(VolumePrimitive v, vec3 p) {
 
 }
 
-// Bow shock: a glowing paraboloid swept along the windward line from params0 (near end, nose radius) to params1 (far end, its relative glow), opening down axis.xyz for axis.w metres.
+// How far the next shock sample can move without stepping over the glowing sheet, set by Shock.
+float shockStep = 1e30;
+
+// Shock layer around the hulls the volume was given: a glowing sheet standing off every windward face by a sliver of the nose radius (params0.w), streaming down axis.xyz.
 VolumeSample Shock(VolumePrimitive v, vec3 p) {
 
     VolumeSample s;
@@ -429,43 +623,56 @@ VolumeSample Shock(VolumePrimitive v, vec3 p) {
     s.extinction = 0.0;
     s.emission = vec3(0.0);
 
-    vec3 span = v.params1.xyz - v.params0.xyz;
-    vec3 across = span - v.axis.xyz * dot(span, v.axis.xyz);
-    float reach = dot(across, across);
-
-    // Measured from the stretch of the line level with this point across the flow, so the sheath is one surface rather than a row of caps.
-    float u = reach > 1e-4 ? clamp(dot(p - v.params0.xyz, across) / reach, 0.0, 1.0) : 0.0;
-
-    vec3 offset = p - v.params0.xyz - span * u;
     float nose = v.params0.w;
-    float x = dot(offset, v.axis.xyz);
+    int nearest;
+    float d = HullDistance(v, p, nearest);
 
-    if (x < -nose || x > v.axis.w) {
+    shockStep = 1e30;
+
+    if (nearest < 0) {
 
         return s;
 
     }
 
-    float r = length(offset - v.axis.xyz * x);
-    float slope = r / nose;
-    float behind = (x - 0.5 * r * slope) * inversesqrt(1.0 + slope * slope);
-    float thickness = nose * 0.07 + max(x, 0.0) * 0.04;
+    if (d < 0.0) {
 
-    // The shock front glows hardest, and the compressed gas behind it fades downstream; the flow tears it into flickering streaks.
-    float sheet = exp(-pow(behind / thickness, 2.0));
-    float inside = smoothstep(-thickness, thickness, behind) * exp(-max(behind, 0.0) / (nose * 0.22));
-    float streaks = texture(shapeNoise, vec3(r / (nose * 1.5), x / (nose * 6.0) - frame.exposure.w * 2.0, 0.37 + u * sqrt(reach) / (nose * 4.0))).r;
+        shockStep = max(-d, nose * 0.02);
 
-    // Hottest in the layer pressed against the nose where the shock stands normal; as it turns oblique down the flanks it barely glows.
-    float fade = 1.0 - smoothstep(v.axis.w * 0.5, v.axis.w, x);
-    float cooling = exp(-max(x, 0.0) / (nose * 0.45));
+        return s;
 
-    // Heating goes with the flow's speed normal to the shock, so the glow collapses down the flanks instead of outlining a ball around the craft.
-    float normal = 1.0 / (1.0 + slope * slope);
-    float oblique = normal * normal;
-    float glow = (sheet + 0.6 * inside) * oblique * cooling * fade * (0.35 + streaks) * mix(1.0, v.params1.w, u);
+    }
 
-    s.emission = v.emission.rgb * mix(vec3(1.0, 0.38, 0.16), vec3(1.0), cooling) * glow;
+    vec3 downstream = v.axis.xyz;
+    vec3 normal = HullNormal(nearest, p, max(nose * 0.01, 0.005));
+    float facing = dot(normal, -downstream);
+
+    // Behind the shoulders the layer peels away from the hull and widens downstream.
+    float trailing = max(dot(p - v.position.xyz, downstream) + nose, 0.0);
+    float lee = clamp(-facing * 2.0 + 0.4, 0.0, 1.0);
+    float standoff = nose * (0.08 + 0.12 * (1.0 - clamp(facing, 0.0, 1.0))) + lee * trailing * 0.22;
+    float thickness = nose * 0.03 + standoff * 0.18;
+
+    shockStep = max(abs(d - standoff) - 2.0 * thickness, 0.0) * 0.8 + thickness * 0.5;
+
+    if (d > standoff + 3.0 * thickness) {
+
+        return s;
+
+    }
+
+    // Newtonian heating goes with the square of the flow normal to the face, so a flat shield glows evenly and the flanks barely do.
+    float windward = clamp(facing, 0.0, 1.0);
+    float heat = windward * windward + 0.015 * exp(-trailing / (nose * 0.8));
+    float sheet = exp(-pow((d - standoff) / thickness, 2.0));
+    float layer = smoothstep(0.0, standoff * 0.4, d) * (1.0 - smoothstep(standoff, standoff + thickness, d));
+
+    vec3 q = (p - v.position.xyz) / (nose * 1.4) - downstream * (frame.exposure.w * 2.0 + trailing / (nose * 3.0));
+    float streaks = texture(shapeNoise, q + 0.37).r;
+
+    float glow = (sheet + 0.6 * layer) * heat * (0.35 + streaks) * (1.0 - smoothstep(v.axis.w * 0.5, v.axis.w, trailing));
+
+    s.emission = v.emission.rgb * mix(vec3(1.0, 0.38, 0.16), vec3(1.0), windward) * glow;
     s.extinction = v.medium.w * glow;
 
     return s;
@@ -614,8 +821,78 @@ struct VolumeResult {
 
 };
 
+// Sunlight blocked by the opaque scene: a craft shading its own exhaust, the tower shading the steam.
+float VolumeSunShadow(vec3 p) {
+
+    int count = int(frame.shadowParams.x);
+
+    if (count == 0) {
+
+        return 1.0;
+
+    }
+
+    int cascade = ShadowCascade(ViewDepth(p));
+
+    if (cascade >= count) {
+
+        return 1.0;
+
+    }
+
+    vec4 clip = frame.shadowViewProjection[cascade] * vec4(p, 1.0);
+    vec2 uv = clip.xy * 0.5 + 0.5;
+
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))) || clip.z > 1.0) {
+
+        return 1.0;
+
+    }
+
+    return texture(shadowMap, vec4(uv, float(cascade), clip.z));
+
+}
+
+// The shock sheet is thinner than a fixed step; steps shrink near it and stretch across the empty gap around it.
+void MarchShock(VolumePrimitive v, vec3 origin, vec3 direction, float enter, float exit, float jitter, inout VolumeResult result) {
+
+    float largest = (exit - enter) / 12.0;
+    float smallest = (exit - enter) / float(max(v.kind.y, 1) * 4);
+    float t = enter;
+    float carry = jitter;
+
+    for (int i = 0; i < v.kind.y && t < exit; i++) {
+
+        vec3 p = origin + direction * t;
+        VolumeSample s = Shock(v, p);
+        float dt = clamp(shockStep, smallest, largest);
+
+        // The first step lands at a jittered point so frames fill in between each other.
+        dt *= i == 0 ? max(carry, 0.05) : 1.0;
+        dt = min(dt, exit - t);
+
+        vec3 light = result.transmittance * s.emission * dt;
+        float weight = min(dot(light, vec3(0.2126, 0.7152, 0.0722)) * frame.exposure.x, result.transmittance);
+
+        result.luminance += light;
+        result.depth += weight * t;
+        result.depthWeight += weight;
+        t += dt;
+
+    }
+
+}
+
 // Marches one primitive between enter and exit, adding to the running result. Luminance is before exposure.
 void MarchVolume(VolumePrimitive v, vec3 origin, vec3 direction, float enter, float exit, float jitter, inout VolumeResult result) {
+
+    if (v.kind.x == VolumeShock) {
+
+        MarchShock(v, origin, direction, enter, exit, jitter, result);
+
+        return;
+
+    }
 
     float pixelAngle = 4.0 / (abs(frame.projection[1][1]) * frame.viewport.y);
 
@@ -625,7 +902,7 @@ void MarchVolume(VolumePrimitive v, vec3 origin, vec3 direction, float enter, fl
     float stepSpan = (exit - enter) / float(steps);
     float growth = 1.0;
 
-    if (v.kind.x == VolumePlume) {
+    if (v.kind.x == VolumePlume && v.params3.w <= 0.0) {
 
         float startHeight = max(0.0, dot(origin - v.params0.xyz + direction * enter, v.axis.xyz));
         float endHeight = max(0.0, dot(origin - v.params0.xyz + direction * exit, v.axis.xyz));
@@ -673,6 +950,12 @@ void MarchVolume(VolumePrimitive v, vec3 origin, vec3 direction, float enter, fl
     float shadow = 0.0;
     float shadowAt = -1e30;
 
+    // Sun and sky light barely change across a plume or a puff, so small volumes look them up once.
+    bool local = v.kind.x != VolumeCloudLayer && v.kind.x != VolumeCirrus;
+    bool cached = false;
+    vec3 sunCache = vec3(0.0);
+    vec3 skyCache = vec3(0.0);
+
     for (int i = 0; i < steps; i++) {
 
         float dt = stepSpan;
@@ -703,7 +986,19 @@ void MarchVolume(VolumePrimitive v, vec3 origin, vec3 direction, float enter, fl
 
         }
 
-        vec3 sun = SunIlluminanceAt(p);
+        if (!cached) {
+
+            vec3 up = normalize(PlanetRelative(p));
+
+            sunCache = SunIlluminanceAt(p);
+            skyCache = (AmbientIrradiance(p, up) + AmbientIrradiance(p, -up)) / (4.0 * PI) * EclipseSkylight(p);
+            cached = local;
+
+        }
+
+        vec3 sun = local ? sunCache * VolumeSunShadow(p) : sunCache;
+        vec3 ambient = skyCache;
+
         // Shadow variation below a volume pixel is unresolved; nearby march steps can share it.
         if (v.kind.x != VolumeCloudLayer || t - shadowAt >= min(volumeFootprint, 650.0)) {
 
@@ -711,8 +1006,6 @@ void MarchVolume(VolumePrimitive v, vec3 origin, vec3 direction, float enter, fl
             shadowAt = t;
 
         }
-        vec3 up = normalize(PlanetRelative(p));
-        vec3 ambient = (AmbientIrradiance(p, up) + AmbientIrradiance(p, -up)) / (4.0 * PI) * EclipseSkylight(p);
 
         // Multiple scattering as fading octaves of the single-scattering term (Wrenninge 2013).
         vec3 scattered = vec3(0.0);

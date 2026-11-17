@@ -21,6 +21,9 @@ public struct ResolvePush {
     // Which pixel of each 2x2 block was marched: xy this frame, zw last frame.
     public float4 Offsets;
 
+    // Inverse of the craft's rotation since last frame, for history that turns with it.
+    public float4 CraftTurn;
+
 }
 
 // Ray-marches every volume source at half resolution after the opaque scene, accumulates it over frames, and Composite blends it in.
@@ -33,6 +36,8 @@ public sealed class VolumetricRenderer : IRenderPass, IResizeListener, IFrameUni
 
     // Each frame keeps a tenth of the new march and nine tenths of the reprojected history.
     private const float NewFrameWeight = 0.1f;
+
+    private const int HullHeaderBytes = 16;
 
     private static readonly int PrimitiveBytes = Marshal.SizeOf<VolumePrimitive>();
 
@@ -47,6 +52,8 @@ public sealed class VolumetricRenderer : IRenderPass, IResizeListener, IFrameUni
     private readonly BufferEx[] _buffers = new BufferEx[Renderer.FramesInFlight];
     private readonly MappedMemory[] _mapped = new MappedMemory[Renderer.FramesInFlight];
     private readonly VkDescriptorSet[] _sets = new VkDescriptorSet[Renderer.FramesInFlight];
+    private readonly BufferEx[] _hullBuffers = new BufferEx[Renderer.FramesInFlight];
+    private readonly MappedMemory[] _hullMapped = new MappedMemory[Renderer.FramesInFlight];
 
     private readonly VkSampler _pointSampler;
     private readonly VkSampler _linearSampler;
@@ -71,6 +78,7 @@ public sealed class VolumetricRenderer : IRenderPass, IResizeListener, IFrameUni
     private float4x4 _previousViewProjection;
     private double3 _previousOrigin;
     private float3 _previousCraftPosition;
+    private floatQuat _previousCraftRotation = floatQuat.Identity;
 
     // Which pixel of each 2x2 block the last march sampled.
     private float2 _offset;
@@ -95,13 +103,14 @@ public sealed class VolumetricRenderer : IRenderPass, IResizeListener, IFrameUni
             Descriptors.Binding(4, VkDescriptorType.StorageImage, VkShaderStageFlags.ComputeBit),
             Descriptors.Binding(5, VkDescriptorType.StorageImage, VkShaderStageFlags.ComputeBit),
             Descriptors.Binding(6, VkDescriptorType.StorageImage, VkShaderStageFlags.ComputeBit),
+            Descriptors.Binding(8, VkDescriptorType.StorageBuffer, VkShaderStageFlags.ComputeBit),
 
         ]);
 
         _pool = Descriptors.CreatePool(device, Renderer.FramesInFlight, [
 
             new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 3 * Renderer.FramesInFlight },
-            new VkDescriptorPoolSize { Type = VkDescriptorType.StorageBuffer, DescriptorCount = Renderer.FramesInFlight },
+            new VkDescriptorPoolSize { Type = VkDescriptorType.StorageBuffer, DescriptorCount = 2 * Renderer.FramesInFlight },
             new VkDescriptorPoolSize { Type = VkDescriptorType.StorageImage, DescriptorCount = 3 * Renderer.FramesInFlight },
 
         ]);
@@ -123,6 +132,19 @@ public sealed class VolumetricRenderer : IRenderPass, IResizeListener, IFrameUni
             _sets[i] = Descriptors.Allocate(device, _pool, _setLayout);
 
             Descriptors.WriteStorageBuffer(device, _sets[i], 3, _buffers[i].VkBuffer, size);
+
+            _hullBuffers[i] = device.CreateBuffer(new BufferEx.CreateInfo {
+
+                Name = "Hulls",
+                BufferSize = HullBytes,
+                BufferUsage = VkBufferUsageFlags.StorageBufferBit,
+                AllocRequiredProperties = VkMemoryPropertyFlags.HostVisibleBit | VkMemoryPropertyFlags.HostCoherentBit,
+
+            });
+
+            _hullMapped[i] = _hullBuffers[i].Map();
+
+            Descriptors.WriteStorageBuffer(device, _sets[i], 8, _hullBuffers[i].VkBuffer, HullBytes);
 
         }
 
@@ -180,6 +202,13 @@ public sealed class VolumetricRenderer : IRenderPass, IResizeListener, IFrameUni
 
     // Render-local position of the craft whose exhaust and plasma are in view; their history follows it.
     public float3 CraftPosition { get; set; }
+
+    public floatQuat CraftRotation { get; set; } = floatQuat.Identity;
+
+    // Refreshed before sources collect, so they can query it.
+    public HullSet? Hulls { get; set; }
+
+    private static ByteSize HullBytes => new((nuint)(HullHeaderBytes + HullSet.Capacity * Marshal.SizeOf<HullPrimitive>() + HullSet.IndexCapacity * sizeof(int)));
 
     // Terrain slot of the body whose ground and air carry the clouds and smoke, or -1 to treat them as fixed in space.
     public int GroundBody { get; set; } = -1;
@@ -274,6 +303,7 @@ public sealed class VolumetricRenderer : IRenderPass, IResizeListener, IFrameUni
         _history[0].Prepare(cmd);
         _history[1].Prepare(cmd);
 
+        Hulls?.Update();
         _volumes.Clear();
 
         foreach (var source in _sources) {
@@ -290,6 +320,8 @@ public sealed class VolumetricRenderer : IRenderPass, IResizeListener, IFrameUni
 
         MemoryMarshal.Write(bytes, new int4(_volumes.Count, 0, 0, 0));
         _volumes.Items.CopyTo(MemoryMarshal.Cast<byte, VolumePrimitive>(bytes[HeaderBytes..]));
+
+        WriteHulls(_hullMapped[frame.FrameIndex].AsSpan<byte>());
 
         var viewProjection = frame.View * frame.Projection;
         var origin = _origin.Origin;
@@ -317,16 +349,20 @@ public sealed class VolumetricRenderer : IRenderPass, IResizeListener, IFrameUni
 
         _written = 1 - _written;
 
+        var turn = floatQuat.Conjugate(CraftRotation * floatQuat.Conjugate(_previousCraftRotation));
+
         var push = new ResolvePush {
 
             PreviousViewProjection = _previousViewProjection,
             OriginShift = new float4(SpaceMath.ToFloat(origin - _previousOrigin), _historyValid ? NewFrameWeight : 1.0f),
-            Motion = new float4(CraftPosition - _previousCraftPosition, GroundBody),
+            Motion = new float4(_previousCraftPosition - Rotate(turn, CraftPosition), GroundBody),
             Offsets = new float4(offset.X, offset.Y, _offset.X, _offset.Y),
+            CraftTurn = ToFloat4(turn),
 
         };
 
         _previousCraftPosition = CraftPosition;
+        _previousCraftRotation = CraftRotation;
         _offset = offset;
 
         _resolve.Dispatch(cmd, frame.FrameSet, _resolveSets[_written], push, x, y, 1);
@@ -335,6 +371,38 @@ public sealed class VolumetricRenderer : IRenderPass, IResizeListener, IFrameUni
         _previousViewProjection = viewProjection;
         _previousOrigin = origin;
         _historyValid = true;
+
+    }
+
+    private void WriteHulls(Span<byte> bytes) {
+
+        var hulls = Hulls;
+        var count = hulls?.Count ?? 0;
+        var indices = hulls?.IndexCount ?? 0;
+
+        MemoryMarshal.Write(bytes, new int4(count, indices, 0, 0));
+
+        if (hulls is null) {
+
+            return;
+
+        }
+
+        var primitiveBytes = HullSet.Capacity * Marshal.SizeOf<HullPrimitive>();
+
+        hulls.Primitives.CopyTo(MemoryMarshal.Cast<byte, HullPrimitive>(bytes.Slice(HullHeaderBytes, primitiveBytes)));
+        hulls.Indices.CopyTo(MemoryMarshal.Cast<byte, int>(bytes[(HullHeaderBytes + primitiveBytes)..]));
+
+    }
+
+    private static float4 ToFloat4(floatQuat q) => new(q.X, q.Y, q.Z, q.W);
+
+    private static float3 Rotate(floatQuat q, float3 v) {
+
+        var axis = new float3(q.X, q.Y, q.Z);
+        var t = 2 * float3.Cross(axis, v);
+
+        return v + q.W * t + float3.Cross(axis, t);
 
     }
 
@@ -354,6 +422,8 @@ public sealed class VolumetricRenderer : IRenderPass, IResizeListener, IFrameUni
 
             _mapped[i].Dispose();
             _buffers[i].Dispose();
+            _hullMapped[i].Dispose();
+            _hullBuffers[i].Dispose();
 
         }
 

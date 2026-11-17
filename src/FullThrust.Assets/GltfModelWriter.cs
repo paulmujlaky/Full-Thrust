@@ -165,9 +165,10 @@ public static class GltfModelWriter {
         for (var i = 0; i < model.Textures.Length; i++) {
 
             var texture = model.Textures[i];
-            var png = texture.Png ?? PngEncoder.Encode(texture.Pixels, texture.Width, texture.Height);
+            // JPEG sources stay JPEG; re-encoding photographic scans as PNG would triple their size.
+            var (bytes, mimeType) = texture.Png is null && texture.Jpeg is { } jpeg ? (jpeg, Image.MimeTypeJpeg) : (texture.Png ?? PngEncoder.Encode(texture.Pixels, texture.Width, texture.Height), Image.MimeTypePng);
 
-            gltf.Images[i] = new Image { Name = texture.Name, MimeType = Image.MimeTypePng, BufferView = addView(png, null) };
+            gltf.Images[i] = new Image { Name = texture.Name, MimeType = mimeType, BufferView = addView(bytes, null) };
             gltf.Textures[i] = new Texture { Sampler = 0, Source = i };
 
         }

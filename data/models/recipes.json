@@ -5,14 +5,8 @@
   "models": [
     { "output": "parts/pod-pinnacle.glb", "type": "crop", "source": "nasa/gemini.glb", "cropMinY": 5.95, "closeHeatShield": true },
     {
-      "output": "parts/pod-concord.glb", "type": "pod", "part": "pod-concord",
-      "topDiameter": 1.7, "heatShieldDepth": 0, "noseHeight": 0.6, "windows": 4,
-      "paint": [0.86, 0.86, 0.85], "paintRoughness": 0.38, "seed": 3
-    },
-    {
-      "output": "parts/pod-odyssey.glb", "type": "pod", "part": "pod-odyssey",
-      "topDiameter": 1.0, "heatShieldDepth": 0.36, "dockingTunnel": true, "windows": 3,
-      "paint": [0.86, 0.86, 0.9], "paintMetallic": 1, "paintRoughness": 0.16, "seed": 4
+      "output": "parts/pod-odyssey.glb", "type": "crop", "part": "pod-odyssey", "source": "smithsonian/apollo11-cm-exterior.glb",
+      "sourceUp": [0.41322, 0.89402, 0.17315], "decimate": 110000, "maxTextureSize": 2048, "fit": "stretch"
     },
     { "output": "parts/rcs-quad.glb", "type": "rcs", "part": "rcs-quad", "paint": [0.78, 0.78, 0.76] },
     { "output": "parts/interstage.glb", "type": "shroud", "pattern": "corrugated", "paint": [0.18, 0.20, 0.22], "paintMetallic": 0.32, "paintRoughness": 0.48 },
@@ -29,11 +23,13 @@
       "bands": [ { "from": 0, "to": 0.45, "material": "metal" }, { "from": 11.4, "to": 12, "material": "accent" } ]
     },
     {
-      "output": "parts/tank-harrier-1.glb", "type": "tank", "part": "tank-harrier-1", "pattern": "tracking", "paint": [0.92, 0.92, 0.92], "seed": 6,
+      "output": "parts/tank-harrier-1.glb", "type": "crop", "part": "tank-harrier-1", "source": "flight/booster.glb", "fit": "stretch", "sourceDiameter": 1.92, "sourceAxis": [-5.9233, 0.0667],
+      "repaint": true, "capEnds": true, "pattern": "tracking", "paint": [0.92, 0.92, 0.92], "seed": 6,
       "bands": [ { "from": 0, "to": 1.4, "material": "accent" }, { "from": 37.3, "to": 38, "material": "accent" } ]
     },
     {
-      "output": "parts/tank-harrier-2.glb", "type": "tank", "part": "tank-harrier-2", "pattern": "tracking", "paint": [0.92, 0.92, 0.92], "seed": 7,
+      "output": "parts/tank-harrier-2.glb", "type": "crop", "part": "tank-harrier-2", "source": "flight/upper-stage.glb", "cropMaxY": 30.25, "fit": "stretch", "sourceDiameter": 1.9, "sourceAxis": [-5.9233, 0.06],
+      "repaint": true, "capEnds": true, "pattern": "tracking", "paint": [0.92, 0.92, 0.92], "seed": 7,
       "bands": [ { "from": 0, "to": 0.5, "material": "metal" } ]
     },
     {

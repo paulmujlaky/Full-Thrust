@@ -206,7 +206,7 @@ public static class CraftAssembly {
             var dry = part.Definition.DryMass;
 
             mass += dry;
-            moment += part.LocalPosition * dry;
+            moment += DryCenter(in part) * dry;
 
             ref readonly var tank = ref tanks.TryGet(row.Entity, out var hasTank);
 
@@ -237,7 +237,7 @@ public static class CraftAssembly {
             var definition = part.Definition;
 
             result.Inertia.Add(InertiaTensor.SolidCylinder(definition.DryMass, definition.Radius, definition.Length));
-            result.Inertia.AddOffset(definition.DryMass, part.LocalPosition - com);
+            result.Inertia.AddOffset(definition.DryMass, DryCenter(in part) - com);
 
             ref readonly var tank = ref tanks.TryGet(row.Entity, out var hasTank);
 
@@ -256,6 +256,8 @@ public static class CraftAssembly {
         return result;
 
     }
+
+    public static double3 DryCenter(in Part part) => part.LocalPosition + part.LocalRotation * part.Definition.MassOffset;
 
     // Settled propellant pools at the aft end of the tank, so the centre of mass climbs as it drains.
     public static double3 PropellantCenter(in Part part, in TankState tank) {

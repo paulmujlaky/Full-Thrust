@@ -68,7 +68,7 @@ public sealed class CloudShadowMap : IRenderPass {
 
         frames.WriteImage(GlobalBindings.CloudShadowMap, _texture.View, _sampler, VkImageLayout.General);
 
-        _kernel = new ComputeKernel(device, shaders, "cloud_shadow.comp", frames.SetLayout, _layout, ByteSize.Of<VolumePrimitive>());
+        _kernel = new ComputeKernel(device, shaders, "cloud_shadow.comp", frames.SetLayout, _layout, ByteSize.Of<VolumePush>());
 
     }
 
@@ -95,7 +95,7 @@ public sealed class CloudShadowMap : IRenderPass {
 
         var groups = ComputeKernel.Groups(Size, GroupSize);
 
-        _kernel.Dispatch(cmd, frame.FrameSet, _set, _clouds.Nearest, groups, groups, 1);
+        _kernel.Dispatch(cmd, frame.FrameSet, _set, _clouds.Nearest.Push, groups, groups, 1);
         Barriers.ComputeToShaders(cmd);
 
     }

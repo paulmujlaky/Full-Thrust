@@ -47,6 +47,24 @@ public sealed class MeshBuilder {
 
     }
 
+    public uint Vertex(in MeshVertex vertex) {
+
+        _vertices.Add(vertex);
+
+        return (uint)(_vertices.Count - 1);
+
+    }
+
+    public void Triangle(uint a, uint b, uint c, int material) {
+
+        var indices = Indices(material);
+
+        indices.Add(a);
+        indices.Add(b);
+        indices.Add(c);
+
+    }
+
     public void Quad(float3 center, float3 right, float3 up, int material) {
 
         Quad(center - right - up, center + right - up, center + right + up, center - right + up, material, 1, 0);

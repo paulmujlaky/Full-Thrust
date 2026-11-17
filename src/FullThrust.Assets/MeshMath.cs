@@ -80,7 +80,9 @@ public static class MeshMath {
 
             if (t == float3.Zero) {
 
-                t = float3.Normalize(float3.Cross(n, MathF.Abs(n.Y) < 0.99f ? float3.UnitY : float3.UnitX));
+                t = float3.NormalizeOrZero(float3.Cross(n, MathF.Abs(n.Y) < 0.99f ? float3.UnitY : float3.UnitX));
+
+                t = t == float3.Zero ? float3.UnitX : t;
 
             }
 

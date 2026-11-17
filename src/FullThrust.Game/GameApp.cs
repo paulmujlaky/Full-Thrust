@@ -374,10 +374,13 @@ public sealed class GameApp : IDisposable {
         _renderer.AddPass(_volumetrics);
         _renderer.AddPass(_volumetrics.CompositePass);
 
-        _plumes = new PlumeSource(_world, _origin, _volumetrics.Lights, _parts, Path.Combine(AppContext.BaseDirectory, "data", "effects", "plumes.json"), _bodies);
+        var hulls = new HullSet(_world, _origin);
+
+        _volumetrics.Hulls = hulls;
+        _plumes = new PlumeSource(_world, _origin, _volumetrics.Lights, _parts, Path.Combine(AppContext.BaseDirectory, "data", "effects", "plumes.json"), _bodies, hulls);
         _volumetrics.AddSource(_plumes);
 
-        _reentry = new ReentrySource(_world, _origin, _volumetrics.Lights);
+        _reentry = new ReentrySource(_world, _origin, _volumetrics.Lights, hulls);
         _volumetrics.AddSource(_reentry);
 
         _clouds = new CloudSource(_bodies, _origin);

@@ -148,7 +148,8 @@ public static class GltfModelLoader {
                 Height = height,
                 Pixels = ToRgba8(texture, width, height),
                 Srgb = srgb,
-                Png = EncodedPng(image),
+                Png = Encoded(image, Image.MimeTypePng),
+                Jpeg = Encoded(image, Image.MimeTypeJpeg),
 
             };
 
@@ -159,11 +160,11 @@ public static class GltfModelLoader {
 
         }
 
-        private byte[]? EncodedPng(int image) {
+        private byte[]? Encoded(int image, string mimeType) {
 
             var source = _gltf.Images[image];
 
-            if (source.BufferView is { } view && source.MimeType == Image.MimeTypePng) {
+            if (source.BufferView is { } view && source.MimeType == mimeType) {
 
                 return _loader.GetBufferView(view).ToArray();
 

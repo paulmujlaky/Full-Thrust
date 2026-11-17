@@ -9,7 +9,10 @@ public static class CoastalGrove {
 
         var mesh = new MeshBuilder();
         var random = new Random(recipe.Seed);
-        var pine = recipe.Pattern == "pine";
+        var pine = recipe.Pattern.StartsWith("pine", StringComparison.Ordinal);
+
+        // The distant stand keeps every tree where it was but draws a few broad sprays on a bare trunk.
+        var low = recipe.Pattern.EndsWith("-low", StringComparison.Ordinal);
         var foliage = mesh.AddMaterial(new MaterialData {
 
             Name = "leaf_sprays",
@@ -39,21 +42,32 @@ public static class CoastalGrove {
             var lean = new float3(random.NextSingle() - 0.35f, 0, random.NextSingle() - 0.5f) * height * 0.12f;
             var axis = float3.UnitY * height + lean;
             mesh.Strut(foot, foot + axis * 0.63f, height * 0.027f, bark);
-            mesh.Strut(foot + axis * 0.63f, foot + axis * 0.94f, height * 0.015f, bark);
-            var limbs = pine ? 25 : 19;
+            var limbs = low ? (pine ? 7 : 6) : pine ? 25 : 19;
+            var limbRandom = new Random(recipe.Seed * 31 + tree);
+
+            if (!low) {
+
+                mesh.Strut(foot + axis * 0.63f, foot + axis * 0.94f, height * 0.015f, bark);
+
+            }
 
             for (var limb = 0; limb < limbs; limb++) {
 
-                var t = (limb + random.NextSingle()) / limbs;
+                var t = (limb + limbRandom.NextSingle()) / limbs;
                 var branchHeight = pine ? 0.49f + t * 0.50f : 0.21f + t * 0.76f;
-                var heading = tree + limb * 2.39996f + 0.56f * random.NextSingle();
+                var heading = tree + limb * 2.39996f + 0.56f * limbRandom.NextSingle();
                 var along = new float3(MathF.Cos(heading), 0, MathF.Sin(heading));
                 var side = float3.Cross(float3.UnitY, along);
-                var width = height * (pine ? 0.19f : 0.39f) * (0.65f + 0.55f * random.NextSingle()) * MathF.Sqrt(1.05f - t);
+                var width = height * (pine ? 0.19f : 0.39f) * (0.65f + 0.55f * limbRandom.NextSingle()) * MathF.Sqrt(1.05f - t);
                 var root = foot + axis * branchHeight;
                 var tip = root + along * width + float3.UnitY * width * 0.26f;
-                mesh.Strut(root, tip, height * 0.012f, bark);
-                var spread = width * (pine ? 0.92f : 1.12f);
+                var spread = width * (pine ? 0.92f : 1.12f) * (low ? 1.6f : 1);
+
+                if (!low) {
+
+                    mesh.Strut(root, tip, height * 0.012f, bark);
+
+                }
 
                 mesh.Quad(tip, side * spread, along * spread * 0.54f + float3.UnitY * spread * 0.64f, foliage);
                 mesh.Quad(tip + float3.UnitY * spread * 0.16f, (along + side * 0.2f) * spread, (float3.UnitY - side * 0.53f) * spread * 0.68f, foliage);

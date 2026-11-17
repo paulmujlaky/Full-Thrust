@@ -40,6 +40,42 @@ public struct VolumePrimitive {
     public float4 Params1;
     public float4 Params2;
 
+    // Meaning depends on the kind; plumes keep the surface they strike here: xyz normal, w distance along the axis or 0.
+    public float4 Params3;
+
+    // x first entry and y count in the shared hull index list.
+    public int4 Hull;
+
+    public readonly VolumePush Push => new() {
+
+        Kind = Kind,
+        Position = Position,
+        Axis = Axis,
+
+        Medium = Medium,
+        Emission = Emission,
+
+        Params0 = Params0,
+        Params1 = Params1,
+        Params2 = Params2,
+
+    };
+
+}
+
+// The leading fields of a primitive, for kernels that take one as push constants.
+[StructLayout(LayoutKind.Sequential)]
+public struct VolumePush {
+
+    public int4 Kind;
+    public float4 Position;
+    public float4 Axis;
+    public float4 Medium;
+    public float4 Emission;
+    public float4 Params0;
+    public float4 Params1;
+    public float4 Params2;
+
 }
 
 // The primitives gathered for one frame; fixed capacity so collecting never allocates.

@@ -30,9 +30,11 @@ public sealed class ReentrySource : IVolumeSource {
     private readonly World _world;
     private readonly FloatingOrigin _origin;
     private readonly PointLights _lights;
+    private readonly HullSet _hulls;
 
-    public ReentrySource(World world, FloatingOrigin origin, PointLights lights) {
+    public ReentrySource(World world, FloatingOrigin origin, PointLights lights, HullSet hulls) {
 
+        _hulls = hulls;
         _world = world;
         _origin = origin;
         _lights = lights;
@@ -66,7 +68,7 @@ public sealed class ReentrySource : IVolumeSource {
 
             var upstream = flight.AirVelocity / speed;
 
-            Measure(row.Entity, craft, upstream, out var front, out var back, out var nose, out var head, out var tail);
+            Measure(row.Entity, craft, upstream, out var front, out var back, out var nose, out var reach);
 
             var flux = SuttonGraves * Math.Sqrt(flight.Ambient.Density / nose) * speed * speed * speed;
             var strength = (float)Math.Clamp(Math.Log(flux / GlowFlux) / Math.Log(PeakFlux / GlowFlux), 0, 1);
@@ -83,29 +85,22 @@ public sealed class ReentrySource : IVolumeSource {
             var luminance = PeakLuminance * strength * MathF.Sqrt(strength);
             var downstream = -SpaceMath.ToFloat(upstream);
 
-            // One shock wraps the whole windward line, so a capsule glows at its shield and a broadside stack wears a single sheath.
+            // The shock wraps the hull itself, so a flat shield wears a flat glowing sheet and a broadside stack a long one.
             var radius = (float)nose;
             var length = radius * 3;
-            var standoff = upstream * (radius * 0.12);
-
-            var nearEnd = _origin.ToLocal(head + standoff);
-            var farEnd = _origin.ToLocal(tail + standoff);
-            var span = farEnd - nearEnd;
-
-            // The far end of a slanted line sits in the nose's wake and heats less; side-on the whole line takes the flow.
-            var across = span - downstream * float3.Dot(span, downstream);
-            var broadside = across.Length() / MathF.Max(span.Length(), 1e-3f);
-            var farGlow = 0.25f + 0.75f * broadside * broadside;
+            var center = _origin.ToLocal(craft.Position);
+            var bound = (float)reach + radius * 0.6f + length * 0.5f;
+            var middle = center + downstream * (length * 0.5f);
 
             var shock = volumes.Add(new VolumePrimitive {
 
-                Kind = new int4((int)VolumeKind.Shock, 48, 0, 0),
-                Position = new float4((nearEnd + farEnd) * 0.5f + downstream * (length * 0.5f), span.Length() * 0.5f + MathF.Sqrt(length * length * 0.25f + 2 * radius * length) + radius),
+                Kind = new int4((int)VolumeKind.Shock, 96, 0, 0),
+                Position = new float4(middle, bound),
                 Axis = new float4(downstream, length),
                 Medium = new float4(0, 0, 0, 0),
                 Emission = new float4(colour * (luminance / (radius * 0.5f)), 0),
-                Params0 = new float4(nearEnd, radius),
-                Params1 = new float4(farEnd, farGlow),
+                Params0 = new float4(center, radius),
+                Hull = _hulls.Select(middle, bound, Entity.Null, radius * 0.5f),
 
             });
 
@@ -150,37 +145,13 @@ public sealed class ReentrySource : IVolumeSource {
 
     }
 
-    // How far the craft reaches upstream and downstream of its origin along the flow, its largest part radius, and the ends of its windward line.
-    private void Measure(Entity entity, in Transform craft, double3 upstream, out double front, out double back, out double nose, out double3 head, out double3 tail) {
+    // How far the craft reaches upstream and downstream of its origin along the flow, its largest part radius, and how far any part reaches from its origin.
+    private void Measure(Entity entity, in Transform craft, double3 upstream, out double front, out double back, out double nose, out double reach) {
 
         front = double.MinValue;
         back = 1;
         nose = 0.5;
-        head = craft.Position;
-        tail = craft.Position;
-
-        // The line runs along the craft's axis as seen by the flow; a craft flying straight into it has a single point.
-        var axis = craft.Rotation * double3.UnitY;
-        var across = axis - upstream * double3.Dot(axis, upstream);
-        var reach = across.Length();
-
-        across = reach > 0.05 ? across / reach : double3.Zero;
-
-        var low = double.MaxValue;
-        var high = double.MinValue;
-        var foremost = double.MinValue;
-
-        foreach (var row in _world.Query<Part>()) {
-
-            ref readonly var part = ref row.C1;
-
-            if (part.Craft == entity) {
-
-                nose = Math.Max(nose, part.Definition.Radius);
-
-            }
-
-        }
+        reach = 1;
 
         foreach (var row in _world.Query<Part>()) {
 
@@ -192,59 +163,14 @@ public sealed class ReentrySource : IVolumeSource {
 
             }
 
-            var leading = Leading(part, craft, upstream, out var offset);
-
-            front = Math.Max(front, leading);
+            nose = Math.Max(nose, part.Definition.Radius);
+            front = Math.Max(front, Leading(part, craft, upstream, out var offset));
             back = Math.Max(back, Leading(part, craft, -upstream, out _));
-
-            // Thrusters, fins and other small parts sit in the main body's shock rather than setting its ends.
-            if (part.Definition.Radius < nose * 0.5) {
-
-                continue;
-
-            }
-
-            var partAxis = craft.Rotation * (part.LocalRotation * double3.UnitY);
-            var side = Math.Abs(double3.Dot(partAxis, across));
-            var extent = side * part.Definition.Length * 0.5 + (1 - side) * part.Definition.Radius;
-            // The curved shock already wraps around each end of the swept line.
-            extent = Math.Max(0, extent - part.Definition.Radius * 0.8);
-            var centre = double3.Dot(offset, across);
-
-            // The part's most upstream point, level with its centre across the flow.
-            var windward = craft.Position + offset + upstream * (leading - double3.Dot(offset, upstream));
-
-            if (reach <= 0.05 && leading > foremost) {
-
-                foremost = leading;
-                head = windward;
-                tail = windward;
-
-            }
-
-            if (reach > 0.05 && centre - extent < low) {
-
-                low = centre - extent;
-                head = windward - across * extent;
-
-            }
-
-            if (reach > 0.05 && centre + extent > high) {
-
-                high = centre + extent;
-                tail = windward + across * extent;
-
-            }
+            reach = Math.Max(reach, offset.Length() + Math.Max(part.Definition.Length * 0.5, part.Definition.Radius));
 
         }
 
         front = front == double.MinValue ? 1 : front;
-
-        if (double3.Dot(tail - head, upstream) > 0) {
-
-            (head, tail) = (tail, head);
-
-        }
 
     }
 

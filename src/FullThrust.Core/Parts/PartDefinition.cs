@@ -18,6 +18,9 @@ public sealed class PartDefinition : IPartDefinition {
 
     public required double Radius { get; init; }
 
+    // Radius at the forward (+Y) end; the aft end has Radius.
+    public required double TopRadius { get; init; }
+
     public required ShapeKind Shape { get; init; }
 
     // Null draws the debug shape instead.
@@ -26,6 +29,10 @@ public sealed class PartDefinition : IPartDefinition {
     public required float4 Color { get; init; }
 
     public required double DragCoefficient { get; init; }
+
+    public double3 MassOffset { get; init; }
+
+    public HeatShieldDefinition? HeatShield { get; init; }
 
     public required IPartModuleDefinition[] Modules { get; init; }
 
@@ -60,3 +67,5 @@ public sealed class PartDefinition : IPartDefinition {
     public override string ToString() => Id;
 
 }
+
+public sealed record HeatShieldDefinition(double AxialDrag, double NormalForce, double CurvatureRadius, double PitchDamping);

@@ -1,0 +1,10 @@
+{
+  // Ground scatter stands, each with a low-detail twin for distant tiles. Regenerate with:
+  // dotnet run --project tools/FullThrust.ModelGen -- build data/models/recipes-scatter.json
+  "models": [
+    { "output": "scene/coastal-pines.glb", "type": "grove", "pattern": "pine", "diameter": 38, "length": 16, "seed": 107 },
+    { "output": "scene/coastal-pines-low.glb", "type": "grove", "pattern": "pine-low", "diameter": 38, "length": 16, "seed": 107 },
+    { "output": "scene/coastal-scrub.glb", "type": "grove", "pattern": "scrub", "diameter": 32, "length": 5.5, "seed": 291 },
+    { "output": "scene/coastal-scrub-low.glb", "type": "grove", "pattern": "scrub-low", "diameter": 32, "length": 5.5, "seed": 291 }
+  ]
+}

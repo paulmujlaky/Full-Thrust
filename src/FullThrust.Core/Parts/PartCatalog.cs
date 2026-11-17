@@ -162,11 +162,14 @@ public static class PartCatalogLoader {
             DryMass = data.Mass,
             Length = data.Length,
             Radius = data.Diameter / 2,
+            TopRadius = TopRadius(data),
 
             Shape = Enum.Parse<ShapeKind>(data.Shape, ignoreCase: true),
             Color = color,
             Model = data.Model is { } model ? RegisterModel(data, model, models) : null,
             DragCoefficient = data.DragCoefficient,
+            MassOffset = Vector(data.CenterOfMass),
+            HeatShield = data.HeatShield is { } shield ? CreateHeatShield(data, shield) : null,
 
             Modules = modules.ToArray(),
 
@@ -186,6 +189,39 @@ public static class PartCatalogLoader {
         var size = new double3(part.Diameter, part.Length, part.Diameter);
 
         return models.Register(model.File, Vector(model.RotationDeg), fit, size, Vector(model.Offset));
+
+    }
+
+    private static double TopRadius(PartData data) {
+
+        if (data.TopDiameter > 0) {
+
+            return data.TopDiameter / 2;
+
+        }
+
+        return data.Shape.ToLowerInvariant() switch {
+
+            "cone" => 0,
+            "frustum" => data.Diameter * 0.22,
+            _ => data.Diameter / 2,
+
+        };
+
+    }
+
+    private static HeatShieldDefinition CreateHeatShield(PartData part, HeatShieldData data) {
+
+        if (data.AxialDrag <= 0 || data.NormalForce < 0 || data.PitchDamping < 0) {
+
+            throw new InvalidDataException($"{part.Id}: a heat shield needs positive axial drag and non-negative normal force and damping.");
+
+        }
+
+        // Unspecified curvature defaults to an Apollo-like 1.2 diameters.
+        var radius = data.CurvatureRadius > 0 ? data.CurvatureRadius : 1.2 * part.Diameter;
+
+        return new HeatShieldDefinition(data.AxialDrag, data.NormalForce, radius, data.PitchDamping);
 
     }
 

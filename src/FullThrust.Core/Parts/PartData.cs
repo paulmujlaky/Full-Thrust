@@ -34,6 +34,9 @@ public sealed class PartData {
 
     public string Shape { get; set; } = "cylinder";
 
+    // Forward diameter of frustum and cone shapes; 0 picks a default for the shape.
+    public double TopDiameter { get; set; }
+
     public double DragCoefficient { get; set; } = 0.8;
 
     public double[] Color { get; set; } = [0.8, 0.8, 0.8];
@@ -49,6 +52,11 @@ public sealed class PartData {
     public DecouplerData? Decoupler { get; set; }
 
     public CommandData? Command { get; set; }
+
+    // Dry-mass centre in part space, for ballasted parts such as capsules.
+    public double[] CenterOfMass { get; set; } = [0, 0, 0];
+
+    public HeatShieldData? HeatShield { get; set; }
 
 }
 
@@ -149,5 +157,20 @@ public sealed class DecouplerData {
 public sealed class CommandData {
 
     public double ReactionWheelTorque { get; set; }
+
+}
+
+// A blunt spherical-segment shield at the part's aft end; Newtonian pressure acts through its centre of curvature.
+public sealed class HeatShieldData {
+
+    public double AxialDrag { get; set; } = 1.3;
+
+    // Normal force per unit of axial force and tan(angle of attack); small for a blunt face.
+    public double NormalForce { get; set; } = 0.16;
+
+    public double CurvatureRadius { get; set; }
+
+    // Magnitude of the pitch-damping derivative Cmq, raised above wind-tunnel values to stand in for entry rate damping.
+    public double PitchDamping { get; set; } = 6;
 
 }

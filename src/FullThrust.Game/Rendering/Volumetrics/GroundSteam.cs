@@ -7,7 +7,7 @@ namespace FullThrust.Game.Rendering.Volumetrics;
 
 internal sealed class GroundSteam(CelestialSystem system, FloatingOrigin origin) {
 
-    private readonly Puff[] _puffs = new Puff[16];
+    private readonly Puff[] _puffs = new Puff[24];
     private int _next;
     private int _sequence;
 
@@ -44,7 +44,7 @@ internal sealed class GroundSteam(CelestialSystem system, FloatingOrigin origin)
 
         foreach (ref readonly var puff in _puffs.AsSpan()) {
 
-            if (puff.Engine == engine && now - puff.Birth < 0.64) {
+            if (puff.Engine == engine && now - puff.Birth < 0.5) {
 
                 return;
 
@@ -86,7 +86,7 @@ internal sealed class GroundSteam(CelestialSystem system, FloatingOrigin origin)
             }
 
             var age = now - puff.Birth;
-            if (age < 0 || age >= 16) {
+            if (age < 0 || age >= 20) {
 
                 puff.Engine = Entity.Null;
                 continue;
@@ -94,16 +94,16 @@ internal sealed class GroundSteam(CelestialSystem system, FloatingOrigin origin)
             }
 
             var expansion = Math.Sqrt(age + 0.03);
-            var radius = puff.Size * (1.3f + 3.9f * (float)expansion);
-            var fade = (float)(1 - age / 16);
+            var radius = puff.Size * (1.5f + 4.4f * (float)expansion);
+            var fade = (float)(1 - age / 20);
             var sweep = puff.Size * (4.5 + 12 * (1 - Math.Exp(-age * 0.8)));
             var center = puff.Surface + puff.Outward * sweep + puff.Wind * age + puff.Up * (radius * 0.46 + 0.29 * age * age);
             var position = origin.ToLocal(system.BodyFixedToWorld(puff.Body, center, now).Position);
             volumes.Add(new VolumePrimitive {
 
-                Kind = new int4((int)VolumeKind.NoiseSphere, 20, 3, 1),
+                Kind = new int4((int)VolumeKind.NoiseSphere, 14, 2, 1),
                 Position = new float4(position, radius),
-                Medium = new float4(0.94f, 0.94f, 0.93f, 0.53f * puff.Strength * fade * fade / (0.65f + 0.26f * (float)age)),
+                Medium = new float4(0.94f, 0.94f, 0.93f, 0.66f * puff.Strength * fade * fade / (0.65f + 0.26f * (float)age)),
                 Emission = new float4(0, 0, 0, 0.42f),
                 Params0 = new float4(radius * 1.35f, puff.Phase, (float)age * 0.027f, 0.75f - puff.Phase),
 

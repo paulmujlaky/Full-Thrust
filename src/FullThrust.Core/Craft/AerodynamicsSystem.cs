@@ -35,7 +35,8 @@ public sealed class AerodynamicsSystem : ISystem {
             }
 
             var rotation = transforms.Get(craft).Rotation;
-            var lever = rotation * (part.LocalPosition - masses.Get(craft).CenterOfMass);
+            var center = masses.Get(craft).CenterOfMass;
+            var lever = rotation * (part.LocalPosition - center);
             var air = flight.AirVelocity + double3.Cross(velocities.Get(craft).Angular, lever);
             var speed = air.Length();
 
@@ -45,12 +46,68 @@ public sealed class AerodynamicsSystem : ISystem {
 
             }
 
-            var drag = DragForce(in part, rotation, air, speed, flight.Ambient.Density, flight.Mach);
+            var angular = velocities.Get(craft).Angular;
+            var drag = PartForce(in part, rotation, center, air, speed, flight.Ambient.Density, flight.Mach, ref lever);
 
-            forces.Get(craft).AddAt(drag, lever);
+            ref var total = ref forces.Get(craft);
+
+            total.AddAt(drag, lever);
             flight.Drag += drag.Length();
 
+            if (part.Definition.HeatShield is { } shield) {
+
+                total.Torque += PitchDamping(in part, shield, rotation, angular, speed, flight.Ambient.Density);
+
+            }
+
         }
+
+    }
+
+    // The lever arrives at the part centre and leaves at the point the force acts through.
+    public double3 PartForce(in Part part, doubleQuat craftRotation, double3 centerOfMass, double3 air, double speed, double density, double mach, ref double3 lever) {
+
+        if (part.Definition.HeatShield is { } shield && part.Aero.BottomArea > 0.5 * part.Definition.FrontalArea) {
+
+            var rotation = craftRotation * part.LocalRotation;
+            var axis = rotation * double3.UnitY;
+
+            if (double3.Dot(air, axis) < 0) {
+
+                var focus = part.LocalPosition + part.LocalRotation * new double3(0, shield.CurvatureRadius - part.Definition.Length / 2, 0);
+
+                lever = craftRotation * (focus - centerOfMass);
+
+                return HeatShieldForce(shield, part.Aero.BottomArea, axis, air, speed, density);
+
+            }
+
+        }
+
+        return DragForce(in part, craftRotation, air, speed, density, mach);
+
+    }
+
+    // Mostly axial, so the resultant tilts off the flow and the capsule trims where its line passes through the centre of mass.
+    public static double3 HeatShieldForce(HeatShieldDefinition shield, double area, double3 axis, double3 air, double speed, double density) {
+
+        var flow = air / speed;
+        var cosine = -double3.Dot(flow, axis);
+        var across = flow + axis * cosine;
+        var q = 0.5 * density * speed * speed;
+
+        return (axis * cosine - across * shield.NormalForce) * (q * area * shield.AxialDrag);
+
+    }
+
+    // Opposes pitch and yaw rates (Cmq); roll about the symmetry axis is left alone.
+    public static double3 PitchDamping(in Part part, HeatShieldDefinition shield, doubleQuat craftRotation, double3 angular, double speed, double density) {
+
+        var axis = craftRotation * (part.LocalRotation * double3.UnitY);
+        var rate = angular - axis * double3.Dot(angular, axis);
+        var diameter = 2 * part.Definition.Radius;
+
+        return rate * (-0.25 * density * speed * part.Definition.FrontalArea * diameter * diameter * shield.PitchDamping);
 
     }
 

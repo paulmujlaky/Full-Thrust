@@ -60,6 +60,46 @@ public sealed class Recipe {
 
     public bool CloseHeatShield { get; set; }
 
+    // crop: a box in the rotated source, as [x, y, z]; overrides cropMinY and cropMaxY.
+    public double[]? CropMin { get; set; }
+
+    public double[]? CropMax { get; set; }
+
+    // crop: source meshes and materials to leave out, matched by name fragment.
+    public List<string> DropMeshes { get; set; } = [];
+
+    public List<string> DropMaterials { get; set; } = [];
+
+    // crop: when set, only source meshes matching one of these name fragments are kept.
+    public List<string> KeepMeshes { get; set; } = [];
+
+    // crop: triangle budget for scanned sources; 0 keeps every triangle.
+    public int Decimate { get; set; }
+
+    // crop: the source direction turned to +Y before sourceRotationDeg, for scans whose axis is tilted.
+    public double[]? SourceUp { get; set; }
+
+    // crop: the body diameter in source units, so fins and legs past it do not shrink the fit; 0 uses the bounds.
+    public double SourceDiameter { get; set; }
+
+    // crop: where the body axis crosses the rotated source, as [x, z], used with sourceDiameter; omitted uses the bounds centre.
+    public double[]? SourceAxis { get; set; }
+
+    // crop: give untextured surfaces the generated tank skin, with paint, accent, pattern and bands as for a tank.
+    public bool Repaint { get; set; }
+
+    // crop: close open tube ends with bulkhead discs.
+    public bool CapEnds { get; set; }
+
+    // crop: repaint exactly these materials, matched by name fragment; empty repaints every untextured one.
+    public List<string> RepaintMaterials { get; set; } = [];
+
+    // crop: textures larger than this are halved until they fit; 0 keeps them.
+    public int MaxTextureSize { get; set; }
+
+    // crop: none, stretch, uniform or length, against the part's diameter and length.
+    public string Fit { get; set; } = "none";
+
     public int RingEngines { get; set; }
 
     public bool CenterEngine { get; set; }
